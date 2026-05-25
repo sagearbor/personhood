@@ -1,0 +1,13 @@
+go 1.22.0
+
+use (
+    ./pkg/types
+    ./src/registry
+    ./src/credential
+    ./src/policy
+    ./src/methods/phone-liveness
+    ./src/methods/email
+    ./src/methods/sms
+    ./src/server
+    ./sdk/go
+)

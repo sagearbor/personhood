@@ -1,0 +1,46 @@
+{
+  "name": "@personhood/sdk",
+  "version": "0.0.1",
+  "description": "TypeScript SDK for verifying Personhood W3C Verifiable Credentials against integrator policies.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "echo 'TODO: tsc' && exit 0",
+    "test": "echo 'TODO: vitest' && exit 0",
+    "lint": "echo 'TODO: eslint' && exit 0",
+    "typecheck": "echo 'TODO: tsc --noEmit' && exit 0"
+  },
+  "keywords": [
+    "personhood",
+    "proof-of-personhood",
+    "verifiable-credentials",
+    "w3c-vc",
+    "identity",
+    "anti-sybil"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sagearbor/personhood.git",
+    "directory": "sdk/typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/sagearbor/personhood/issues"
+  },
+  "homepage": "https://github.com/sagearbor/personhood#readme",
+  "engines": {
+    "node": ">=20"
+  }
+}

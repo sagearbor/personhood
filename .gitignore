@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build output
+dist/
+build/
+out/
+target/
+.next/
+.nuxt/
+*.tsbuildinfo
+
+# Go test/build artifacts
+*.test
+*.out
+
+# Caches
+.cache/
+coverage/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Workspace tooling
+tmp/
+.archon/
+.claude/
