@@ -1,0 +1,56 @@
+# Personhood server — Fly.io app config.
+#
+# Provision:
+#   fly auth signup            (one-time, free tier; no credit card required)
+#   fly launch --no-deploy     (creates the app + edits the [build] image
+#                                only if you want Fly to manage your Dockerfile
+#                                build; for us the local Dockerfile is used)
+#   fly secrets set ISSUER_ED25519_SK_B64=...   (use `go run ./src/server/cmd/gen-key`)
+#   fly secrets set SENDGRID_API_KEY=...        SENDGRID_FROM=noreply@yourdomain.com
+#   fly secrets set TWILIO_ACCOUNT_SID=...      TWILIO_AUTH_TOKEN=...      TWILIO_FROM=+15551234567
+#   fly secrets set PERSONA_API_KEY=...         PERSONA_TEMPLATE_ID=itmpl_...   PERSONA_WEBHOOK_SECRET=whsec_...
+#   fly deploy
+#
+# Once deployed, set:
+#   SERVER_PUBLIC_URL = https://<app>.fly.dev      (use `fly secrets set`)
+#   CORS_ALLOWED_ORIGINS = https://<your-web-app>.vercel.app
+# Then in Persona's dashboard, register the webhook URL:
+#   https://<app>.fly.dev/v1/methods/government-id-liveness/webhook
+# Persona reveals the signing secret immediately after creation — copy it
+# into PERSONA_WEBHOOK_SECRET via `fly secrets set` and redeploy.
+
+app = "personhood"          # change to your own app name during `fly launch`
+primary_region = "iad"      # Ashburn, VA — closest free-tier region to most US users
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  SERVER_ADDR = ":8080"
+  # SERVER_PUBLIC_URL, CORS_ALLOWED_ORIGINS — set via `fly secrets set` so
+  # the deploy bundle does not carry them.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+  cpus = 1
