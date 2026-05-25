@@ -18,7 +18,7 @@ implementations of `SessionStore`, `email.TokenStore`, and `sms.OTPStore`.
 go run ./src/server/cmd/gen-key
 
 # 2. Put that line in `.env.local` (gitignored) alongside any other vars from
-#    `env.example`, then source and start the server:
+#    `.example.env`, then source and start the server:
 export ISSUER_ED25519_SK_B64=...  # from step 1
 export SERVER_ADDR=":8080"
 export SERVER_PUBLIC_URL="http://localhost:8080"
@@ -58,7 +58,7 @@ All requests/responses are JSON unless noted.
 
 ## Configuration
 
-See `env.example` at the repo root for the canonical env-var list. The server
+See `.example.env` at the repo root for the canonical env-var list. The server
 itself only reads:
 
 | Variable | Required | Default | Purpose |

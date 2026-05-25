@@ -324,7 +324,7 @@ Note that the supplementary points would have totalled 20 (8 + 12) — *just* en
 
 ## Delivery configuration — environment variables
 
-Every method that talks to a third-party API is configured via env vars. The reference server reads them at startup and routes them into the appropriate `Sender` / `Client` / webhook handler. See `env.example` at the repo root for the canonical template (copy to `.env.local` and fill in).
+Every method that talks to a third-party API is configured via env vars. The reference server reads them at startup and routes them into the appropriate `Sender` / `Client` / webhook handler. See `.example.env` at the repo root for the canonical template (copy to `.env.local` and fill in).
 
 ### Email — SendGrid (`src/methods/email`)
 
