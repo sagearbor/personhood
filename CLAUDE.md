@@ -4,18 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Personhood is an open-source, pluggable proof-of-personhood framework. It issues W3C Verifiable Credentials produced by composable verification methods and evaluates them against integrator-declared policies. This repo is in early development — the v0.1 scaffold is in place; implementation lands in subsequent PRs.
+Personhood is an open-source, pluggable proof-of-personhood framework. It issues W3C Verifiable Credentials produced by composable verification methods and evaluates them against integrator-declared policies.
 
-The project is being extracted from [OpenLine](https://github.com/sagearbor/openline) (at `/Users/sophie.arborbot/PROJECTS/github_repos/openline/`), which originally needed proof-of-personhood for its one-person-one-vote governance.
+The project was extracted from [OpenLine](https://github.com/sagearbor/openline) (at `/Users/sophie.arborbot/PROJECTS/github_repos/openline/`), which originally needed proof-of-personhood for its one-person-one-vote governance.
+
+## Current Status (2026-05-25)
+
+**Backend primitives are complete.** Six merged PRs cover the full Go-side core:
+
+| Module | Status | Lines | Tests |
+|---|---|---|---|
+| `pkg/types` | ✅ implemented | 1,287 | 24 |
+| `src/registry` | ✅ implemented (thread-safe, race-clean) | 538 | 10 |
+| `src/credential` | ✅ implemented (Ed25519 + RFC 8785 JCS + Status List 2021) | 1,412 | 33 |
+| `src/policy` | ✅ implemented (YAML/JSON DSL + evaluator + nullifier stub) | ~1,200 | ~20 |
+| `src/methods/email` | ✅ implemented (magic-link, disposable blocklist) | ~700 | ~10 |
+| `src/methods/sms` | ✅ implemented (6-digit OTP, lockout, VOIP heuristic) | ~700 | ~14 |
+| `docs/` | ✅ 5 design specs (~14k words) | 1,436 | — |
+
+**Stubs still needing implementation:**
+
+| Module | Why it's blocking | Approx effort |
+|---|---|---|
+| `src/server` | No REST API yet — ceremonies have no HTTP wiring | ~½ day (200–400 LOC) |
+| `app/web` | No end-user app — phone testing impossible without it | ~1 day (500–800 LOC, Next.js) |
+| `src/methods/phone-liveness` | The anchor — no high-stakes use until built | ~3–5 days (FaceID + App Attest + native bridges) |
+| `sdk/go`, `sdk/typescript` | Integrator-facing thin wrappers; can be built after server | ~1 day each |
+| `app/mobile` | React Native installable; deferred to v0.2 | ~1–2 weeks |
+| Real `Sender` implementations | Currently `LogSender` only. Need Twilio + SendGrid wrappers | ~1 hour + free-tier signups |
+
+**Suggested next prompts** (paste into a fresh CC session in this repo):
+
+- *"Build the `src/server/` reference REST issuer. Wire together `pkg/types`, `src/registry`, `src/credential`, `src/policy`, and the email + SMS methods into the endpoints sketched in `src/server/README.md`. Use net/http + chi router. Add httptest integration tests. Open a PR."*
+- *"Build `app/web/` as a Next.js 14 App Router enrollment app that calls a local Personhood server at http://localhost:8080. Use the `frontend-design` skill for distinctive styling. Three screens: email entry → SMS entry → credential issued with JSON viewer. Open a PR."*
+- *"Wire real email + SMS delivery: write a `SendGridSender` in `src/methods/email/` and a `TwilioSender` in `src/methods/sms/`, each behind a build tag. Document required env vars."*
+
+The full v0.1 design plan lives at `/Users/sophie.arborbot/.claude/plans/eventual-swinging-stearns.md`. The most recent session wrapup is at `tmp/wrapups/` (gitignored).
 
 ## Architecture
 
 Four logical layers, each its own Go module (or set of modules):
 
 1. **Methods** (`src/methods/*`) — pluggable verification methods. v0.1 ships three:
-   - **`phone-liveness`** (anchor) — Apple FaceID + App Attest / Android BiometricPrompt + Play Integrity. This is the only **anchor** method in v0.1; every valid credential must include at least one anchor method.
-   - **`email`** (supplementary) — magic-link verification.
-   - **`sms`** (supplementary) — one-time code verification.
+   - **`phone-liveness`** (anchor, **stub**) — Apple FaceID + App Attest / Android BiometricPrompt + Play Integrity. This is the only **anchor** method in v0.1; every valid credential must include at least one anchor method.
+   - **`email`** (supplementary, ✅ implemented) — magic-link verification.
+   - **`sms`** (supplementary, ✅ implemented) — one-time code verification.
 2. **Registry** (`src/registry`) — methods register themselves at startup; the issuer queries this to discover what's available.
 3. **Credential** (`src/credential`) — W3C Verifiable Credential issuer + verifier. Signs with Ed25519.
 4. **Policy** (`src/policy`) — declarative JSON DSL that integrators use to express verification requirements (e.g. "anchor required + 2 supplementary points + verified within last 90 days"). The evaluator checks a presented credential against a policy and returns pass/fail with reasons.
