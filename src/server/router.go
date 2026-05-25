@@ -47,6 +47,22 @@ func (s *Server) Router() http.Handler {
 
 		r.Post("/credentials/issue", s.handleIssueCredential)
 		r.Get("/status-list/{listId}", s.handleStatusList)
+
+		// Method-owned routes (e.g. third-party webhook receivers). Mounted
+		// under /v1/methods/{id}/{path}. Added at build time by
+		// BuildDependencies; see government-id-liveness for the Persona
+		// webhook example.
+		for _, mr := range s.methodRoutes {
+			path := "/methods/" + mr.MethodID + "/" + mr.Path
+			switch mr.Method {
+			case http.MethodPost:
+				r.Method(http.MethodPost, path, mr.Handler)
+			case http.MethodGet:
+				r.Method(http.MethodGet, path, mr.Handler)
+			default:
+				r.Handle(path, mr.Handler)
+			}
+		}
 	})
 
 	// Top-level alias the README sketch documents. We keep BOTH paths for
