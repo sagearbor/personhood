@@ -322,6 +322,67 @@ Evaluation:
 
 Note that the supplementary points would have totalled 20 (8 + 12) — *just* enough to satisfy `min_supplementary_points`. But because the anchor was stale, the credential fails outright. This is the framework's central design choice: **stacking supplementary signals never substitutes for a fresh anchor when the policy demands one**. An attacker who has farmed thousands of emails and burner SIMs cannot satisfy a policy that requires a fresh anchor, period.
 
+## Delivery configuration — environment variables
+
+Every method that talks to a third-party API is configured via env vars. The reference server reads them at startup and routes them into the appropriate `Sender` / `Client` / webhook handler. See `env.example` at the repo root for the canonical template (copy to `.env.local` and fill in).
+
+### Email — SendGrid (`src/methods/email`)
+
+Built behind the `sendgrid` build tag. Default build uses `LogSender` (writes the magic link to stdout — useful for dev and unit tests).
+
+| Variable | Required when `sendgrid` tag | Notes |
+|---|---|---|
+| `SENDGRID_API_KEY` | yes | Get from <https://app.sendgrid.com/settings/api_keys>. Scope: `mail.send`. |
+| `SENDGRID_FROM` | yes | A verified Single Sender or any address on an authenticated domain. |
+| `SENDGRID_FROM_NAME` | optional | Display name shown to recipients. Defaults to empty. |
+
+Compile with `go build -tags sendgrid ./src/server/cmd/server`. If `SENDGRID_API_KEY` is set but the binary was not built with the tag, the email package logs a warning and falls back to `LogSender` rather than failing silently.
+
+### SMS — Twilio (`src/methods/sms`)
+
+Built behind the `twilio` build tag. Default build uses `LogSender`.
+
+| Variable | Required when `twilio` tag | Notes |
+|---|---|---|
+| `TWILIO_ACCOUNT_SID` | yes | From the Twilio console home page. |
+| `TWILIO_AUTH_TOKEN` | yes | From the Twilio console home page. |
+| `TWILIO_FROM` | yes | E.164 phone number you own (e.g. `+15551234567`). Trial accounts must verify the destination at <https://console.twilio.com/us1/develop/phone-numbers/manage/verified>. |
+
+Compile with `go build -tags twilio ./src/server/cmd/server`. To enable both vendors at once: `go build -tags 'sendgrid twilio'`.
+
+### Government ID + liveness — Persona (`src/methods/government-id-liveness`)
+
+No build tag; the module is always compiled. Registration is gated on env vars: the server registers the method only when *all three* of `PERSONA_API_KEY`, `PERSONA_TEMPLATE_ID`, and `PERSONA_WEBHOOK_SECRET` are set.
+
+| Variable | Required | Notes |
+|---|---|---|
+| `PERSONA_API_KEY` | yes | `persona_sandbox_…` (free) or `persona_production_…`. |
+| `PERSONA_TEMPLATE_ID` | yes | Inquiry template id, starts with `itmpl_`. |
+| `PERSONA_WEBHOOK_SECRET` | yes | Shown when creating the webhook in Persona's dashboard. Cannot be re-fetched later. |
+| `PERSONA_ENVIRONMENT_ID` | optional | Scopes to a particular sandbox env. |
+| `PERSONA_RETURN_URL` | optional | URL the user is redirected to after completing the hosted flow. Defaults to Persona's "all done" screen. |
+
+### Server itself
+
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `ISSUER_ED25519_SK_B64` | yes | — | Generate with `go run ./src/server/cmd/gen-key`. |
+| `SERVER_ADDR` | no | `:8080` | Bind address. |
+| `SERVER_PUBLIC_URL` | no | `http://localhost:8080` | Used for magic-link URLs, did:web issuer DID, status list URL. |
+| `CORS_ALLOWED_ORIGINS` | no | `http://localhost:3000` | Comma-separated browser origin allowlist. |
+| `SESSION_TTL_MINUTES` | no | `60` | Enrollment session lifetime. |
+
+### Build matrix
+
+| Command | Email sender | SMS sender |
+|---|---|---|
+| `go build ./src/server/cmd/server` | `LogSender` | `LogSender` |
+| `go build -tags sendgrid ./...` | `SendGridSender` (if env set) | `LogSender` |
+| `go build -tags twilio ./...` | `LogSender` | `TwilioSender` (if env set) |
+| `go build -tags 'sendgrid twilio' ./...` | `SendGridSender` | `TwilioSender` |
+
+`Dockerfile` (PR #5) builds with `-tags 'sendgrid twilio'` so production has both.
+
 ## Cross-references
 
 - The full credential schema and how `verifiedMethods[]` is serialized: [03-credential-format.md](./03-credential-format.md).
