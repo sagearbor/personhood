@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://personhood.protocol/schemas/policy.schema.json",
+  "title": "Policy",
+  "description": "Integrator-declared verification requirements for a single action. YAML policy files validate against this same schema after YAML-to-JSON conversion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "policy_id", "action"],
+  "properties": {
+    "version": {
+      "description": "Policy DSL version. Currently only '1.0' is supported.",
+      "type": "string",
+      "const": "1.0"
+    },
+    "policy_id": {
+      "description": "Stable, integrator-chosen identifier (e.g. 'ubi.claim.daily').",
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "description": "Integrator action this policy governs (e.g. 'vote.cast').",
+      "type": "string",
+      "minLength": 1
+    },
+    "anchor_required": {
+      "description": "Whether the credential must include at least one anchor method.",
+      "type": "boolean",
+      "default": false
+    },
+    "min_supplementary_points": {
+      "description": "Minimum sum of supplementary method strengths required. Zero means no supplementary requirement.",
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    },
+    "allowed_methods": {
+      "description": "Restricts which method IDs may count toward the requirements. Omitted/null means all methods are allowed.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "blocked_methods": {
+      "description": "Method IDs that must NOT count toward the requirements (overrides allowed_methods).",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "min_strength_per_method": {
+      "description": "Per-method minimum strength override. Tightens a method's requirement above its default registry value.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100
+      }
+    },
+    "max_credential_age_seconds": {
+      "description": "Maximum age of the credential since its issuanceDate. Zero means no limit.",
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    },
+    "max_anchor_method_age_seconds": {
+      "description": "Maximum age of the anchor method verification since its verified_at timestamp. Zero means use the method's own freshness_lifetime.",
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    },
+    "require_fresh_anchor_proof": {
+      "description": "Require a live challenge-response proof of anchor control at presentation time.",
+      "type": "boolean",
+      "default": false
+    },
+    "nullifier_required": {
+      "description": "Require the credential to expose a NullifierBinding and present a derived nullifier scoped by nullifier_context_tag.",
+      "type": "boolean",
+      "default": false
+    },
+    "nullifier_context_tag": {
+      "description": "Per-context tag bound to the derived nullifier (e.g. 'vote:2026-05-24:proposal-42'). Required when nullifier_required is true.",
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "nullifier_required": { "const": true } }, "required": ["nullifier_required"] },
+      "then": { "required": ["nullifier_context_tag"] }
+    }
+  ]
+}
