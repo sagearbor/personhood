@@ -1,0 +1,88 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@protected": true,
+
+    "id": "@id",
+    "type": "@type",
+
+    "personhood": "https://personhood.protocol/vocab#",
+    "sec": "https://w3id.org/security#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "cred": "https://www.w3.org/2018/credentials#",
+
+    "PersonhoodCredential": {
+      "@id": "personhood:PersonhoodCredential",
+      "@context": {
+        "@version": 1.1,
+        "@protected": true,
+        "id": "@id",
+        "type": "@type"
+      }
+    },
+
+    "verifiedMethods": {
+      "@id": "personhood:verifiedMethods",
+      "@type": "@id",
+      "@container": "@list",
+      "@context": {
+        "@version": 1.1,
+        "@protected": true,
+
+        "id": "@id",
+        "type": "@type",
+
+        "method_id": {
+          "@id": "personhood:methodId",
+          "@type": "xsd:string"
+        },
+        "strength": {
+          "@id": "personhood:strength",
+          "@type": "xsd:integer"
+        },
+        "verified_at": {
+          "@id": "personhood:verifiedAt",
+          "@type": "xsd:dateTime"
+        },
+        "freshness_lifetime": {
+          "@id": "personhood:freshnessLifetime",
+          "@type": "xsd:duration"
+        },
+        "attestation_digest": {
+          "@id": "personhood:attestationDigest",
+          "@type": "xsd:hexBinary"
+        }
+      }
+    },
+
+    "anchorMethodId": {
+      "@id": "personhood:anchorMethodId",
+      "@type": "xsd:string"
+    },
+
+    "nullifierBinding": {
+      "@id": "personhood:nullifierBinding",
+      "@type": "@id",
+      "@context": {
+        "@version": 1.1,
+        "@protected": true,
+
+        "id": "@id",
+        "type": "@type",
+
+        "commitment": {
+          "@id": "personhood:commitment",
+          "@type": "xsd:hexBinary"
+        },
+        "curve": {
+          "@id": "personhood:curve",
+          "@type": "xsd:string"
+        },
+        "scheme": {
+          "@id": "personhood:scheme",
+          "@type": "xsd:string"
+        }
+      }
+    }
+  }
+}
