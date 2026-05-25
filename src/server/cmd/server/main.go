@@ -30,13 +30,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("server: derive magic link base URL: %v", err)
 	}
+	// Return URL Persona redirects the user to after the hosted flow. Default
+	// to the web app's enrollment page; if unset, Persona shows its own
+	// "all done" screen and the user navigates back manually.
+	returnURL := os.Getenv("PERSONA_RETURN_URL")
 
-	reg, err := server.DefaultMethods(magicLinkBaseURL)
+	deps, err := server.BuildDependencies(magicLinkBaseURL, returnURL)
 	if err != nil {
-		log.Fatalf("server: build default registry: %v", err)
+		log.Fatalf("server: build dependencies: %v", err)
 	}
 
-	srv, err := server.NewServer(cfg, server.Dependencies{Registry: reg})
+	srv, err := server.NewServer(cfg, deps)
 	if err != nil {
 		log.Fatalf("server: construct: %v", err)
 	}

@@ -4,12 +4,15 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
+	govidmethod "github.com/sagearbor/personhood/src/methods/government-id-liveness"
 	smsmethod "github.com/sagearbor/personhood/src/methods/sms"
 	"github.com/sagearbor/personhood/src/registry"
 )
@@ -20,7 +23,8 @@ import (
 //   - the method Registry (built from injected method plugins),
 //   - the credential Issuer (Ed25519 signing key),
 //   - the in-memory SessionStore,
-//   - the DID document material (issuer DID, verification method, public key).
+//   - the DID document material (issuer DID, verification method, public key),
+//   - optional method-specific HTTP routes (e.g. Persona webhook).
 //
 // One Server value is constructed at startup and shared across handlers.
 type Server struct {
@@ -35,6 +39,12 @@ type Server struct {
 	issuer   *credential.Issuer
 	sessions *SessionStore
 
+	// methodRoutes carries additional HTTP handlers a method plugin needs
+	// the server to host (e.g. third-party webhook receivers). Populated by
+	// the registry-builder helpers; mounted under /v1/methods/{id}/<path>
+	// in Router().
+	methodRoutes []methodRoute
+
 	// nowFunc is overridden in tests to make ceremony timestamps deterministic.
 	// Default is time.Now.UTC.
 	nowFunc func() time.Time
@@ -44,12 +54,26 @@ type Server struct {
 	credentialLifetime time.Duration
 }
 
+// methodRoute describes one HTTP handler a method plugin owns. The server
+// mounts it at /v1/methods/{MethodID}/{Path}.
+type methodRoute struct {
+	MethodID string
+	Path     string // e.g. "webhook"
+	Method   string // "GET" or "POST"
+	Handler  http.Handler
+}
+
 // Dependencies bundles the injectable services NewServer needs. Use the
 // helpers BuildDefaultMethods + NewDefaultDependencies for a stock v0.1
 // deployment; tests construct Dependencies directly with fakes.
 type Dependencies struct {
 	// Registry is the method registry the server consults. Required.
 	Registry *registry.Registry
+
+	// MethodRoutes carries any extra HTTP handlers method plugins own
+	// (e.g. Persona's webhook receiver). Empty for a registry that only
+	// holds email + sms.
+	MethodRoutes []methodRoute
 }
 
 // NewServer constructs a Server from cfg and deps. It returns an error if cfg
@@ -91,6 +115,7 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		registry:           deps.Registry,
 		issuer:             issuer,
 		sessions:           NewSessionStore(cfg.SessionTTL),
+		methodRoutes:       deps.MethodRoutes,
 		nowFunc:            func() time.Time { return time.Now().UTC() },
 		credentialLifetime: 365 * 24 * time.Hour,
 	}, nil
@@ -138,7 +163,9 @@ func (s *Server) SetCredentialLifetime(d time.Duration) {
 // land on (typically PublicURL + "/v1/methods/email/verify").
 //
 // Production callers should build their own registry with real Sender
-// implementations (e.g. SendGrid for email, Twilio for SMS — see PR #3).
+// implementations (e.g. SendGrid for email, Twilio for SMS — see PR #3) and
+// any extra anchor methods (e.g. government-id-liveness — see
+// BuildDependencies).
 func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
 	reg := registry.New()
 
@@ -159,6 +186,54 @@ func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
 		return nil, fmt.Errorf("register sms: %w", err)
 	}
 	return reg, nil
+}
+
+// BuildDependencies assembles the full Dependencies struct for a v0.1
+// deployment by:
+//   - registering email + sms (always, with LogSender unless real-sender
+//     PR #3 is applied),
+//   - registering government-id-liveness when PERSONA_API_KEY +
+//     PERSONA_TEMPLATE_ID + PERSONA_WEBHOOK_SECRET are all set, and
+//     declaring its webhook route so Router() can mount it.
+//
+// magicLinkBaseURL is the absolute URL the email method's magic links should
+// resolve to.
+//
+// returnURL, if non-empty, is appended to the Persona hosted flow as
+// redirect-uri so the user lands back on the web app after completing
+// verification. Pass "" to omit.
+func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error) {
+	reg, err := DefaultMethods(magicLinkBaseURL)
+	if err != nil {
+		return Dependencies{}, err
+	}
+	deps := Dependencies{Registry: reg}
+
+	apiKey := os.Getenv("PERSONA_API_KEY")
+	templateID := os.Getenv("PERSONA_TEMPLATE_ID")
+	webhookSecret := os.Getenv("PERSONA_WEBHOOK_SECRET")
+	envID := os.Getenv("PERSONA_ENVIRONMENT_ID")
+	if apiKey != "" && templateID != "" && webhookSecret != "" {
+		client, err := govidmethod.NewPersonaClient(apiKey, templateID, envID, nil)
+		if err != nil {
+			return Dependencies{}, fmt.Errorf("government-id-liveness: persona client: %w", err)
+		}
+		gov := govidmethod.NewMethod(govidmethod.Config{
+			PersonaClient: client,
+			Store:         govidmethod.NewInMemoryStore(),
+			ReturnURL:     returnURL,
+		})
+		if err := reg.Register(gov); err != nil {
+			return Dependencies{}, fmt.Errorf("register government-id-liveness: %w", err)
+		}
+		deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
+			MethodID: govidmethod.MethodID,
+			Path:     "webhook",
+			Method:   http.MethodPost,
+			Handler:  gov.WebhookHandler(webhookSecret, nil),
+		})
+	}
+	return deps, nil
 }
 
 // absoluteURL joins base + path safely. Returns an error if base is not a

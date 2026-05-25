@@ -5,6 +5,7 @@ use (
 	./sdk/go
 	./src/credential
 	./src/methods/email
+	./src/methods/government-id-liveness
 	./src/methods/phone-liveness
 	./src/methods/sms
 	./src/policy
