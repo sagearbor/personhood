@@ -1,0 +1,30 @@
+# Keep the Docker build context small. Anything not needed by `go build`
+# from src/server should be excluded here.
+.git
+.github
+.claude
+.idea
+.vscode
+.archon
+.cache
+.next
+node_modules
+
+# Web app — not built by this Dockerfile (web is deployed to Vercel).
+app
+sdk/typescript
+
+# Docs and meta — never needed to compile the binary.
+docs
+tmp
+tests
+*.md
+
+# Local secrets — should never enter a layer.
+.env
+.env.*
+env.example
+
+# OS noise
+.DS_Store
+*.swp
