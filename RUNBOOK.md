@@ -10,6 +10,16 @@ time is more like 20 minutes.
 
 ---
 
+## Verify your setup at any point
+
+```bash
+bash scripts/check-setup.sh
+```
+
+Loads `.env.local`, pings each vendor's metadata endpoint, and prints
+✓ / − / ✗ per section. No emails or SMS get sent. Re-run after each step
+in this RUNBOOK to confirm the previous step worked.
+
 ## TL;DR for the impatient
 
 ```bash
@@ -216,7 +226,7 @@ Put your keys in `.env.local` at the repo root (this file is
 gitignored):
 
 ```bash
-cp env.example .env.local
+cp .example.env .env.local
 $EDITOR .env.local
 ```
 
@@ -233,7 +243,7 @@ go run -tags 'sendgrid twilio' ./src/server/cmd/server
 You can run a sanity check on SendGrid without sending mail:
 
 ```bash
-bash tmp/test-sendgrid.sh
+bash scripts/test-sendgrid.sh
 ```
 
 — this hits SendGrid's `/v3/scopes` and `/v3/verified_senders` endpoints
@@ -384,7 +394,7 @@ that includes one anchor (ID + selfie) + two supplementary methods.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `Cannot reach the issuer` on first load | `NEXT_PUBLIC_PERSONHOOD_SERVER_URL` is wrong or the server is offline. | `vercel env ls` to confirm; `fly status` to confirm the machine is running. |
-| Email magic link never arrives | SendGrid key invalid or sender not verified. | `bash tmp/test-sendgrid.sh` (from a local checkout with `.env.local` populated). |
+| Email magic link never arrives | SendGrid key invalid or sender not verified. | `bash scripts/test-sendgrid.sh` (from a local checkout with `.env.local` populated). |
 | SMS code never arrives | Trial Twilio account hasn't verified the destination number. | <https://console.twilio.com/us1/develop/phone-numbers/manage/verified> |
 | `government-id-liveness` not in `/v1/methods` | One of `PERSONA_API_KEY`, `PERSONA_TEMPLATE_ID`, `PERSONA_WEBHOOK_SECRET` not set on Fly. | `fly secrets list` to confirm all three are present. |
 | Persona webhook returns 401 | `PERSONA_WEBHOOK_SECRET` mismatch. | Re-copy the secret from <https://withpersona.com/dashboard/webhooks> and `fly secrets set` it. |
