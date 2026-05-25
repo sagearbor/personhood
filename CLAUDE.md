@@ -8,47 +8,22 @@ Personhood is an open-source, pluggable proof-of-personhood framework. It issues
 
 The project was extracted from [OpenLine](https://github.com/sagearbor/openline) (at `/Users/sophie.arborbot/PROJECTS/github_repos/openline/`), which originally needed proof-of-personhood for its one-person-one-vote governance.
 
-## Current Status (2026-05-25)
+## Current state and next steps — see `STATUS.md`
 
-**Backend primitives are complete.** Six merged PRs cover the full Go-side core:
+`STATUS.md` at the repo root is the single source of truth for what's implemented, what's stub, and the ordered dev checklist (with concrete prompts you can paste into a new CC session). It changes often; this file does not.
 
-| Module | Status | Lines | Tests |
-|---|---|---|---|
-| `pkg/types` | ✅ implemented | 1,287 | 24 |
-| `src/registry` | ✅ implemented (thread-safe, race-clean) | 538 | 10 |
-| `src/credential` | ✅ implemented (Ed25519 + RFC 8785 JCS + Status List 2021) | 1,412 | 33 |
-| `src/policy` | ✅ implemented (YAML/JSON DSL + evaluator + nullifier stub) | ~1,200 | ~20 |
-| `src/methods/email` | ✅ implemented (magic-link, disposable blocklist) | ~700 | ~10 |
-| `src/methods/sms` | ✅ implemented (6-digit OTP, lockout, VOIP heuristic) | ~700 | ~14 |
-| `docs/` | ✅ 5 design specs (~14k words) | 1,436 | — |
-
-**Stubs still needing implementation:**
-
-| Module | Why it's blocking | Approx effort |
-|---|---|---|
-| `src/server` | No REST API yet — ceremonies have no HTTP wiring | ~½ day (200–400 LOC) |
-| `app/web` | No end-user app — phone testing impossible without it | ~1 day (500–800 LOC, Next.js) |
-| `src/methods/phone-liveness` | The anchor — no high-stakes use until built | ~3–5 days (FaceID + App Attest + native bridges) |
-| `sdk/go`, `sdk/typescript` | Integrator-facing thin wrappers; can be built after server | ~1 day each |
-| `app/mobile` | React Native installable; deferred to v0.2 | ~1–2 weeks |
-| Real `Sender` implementations | Currently `LogSender` only. Need Twilio + SendGrid wrappers | ~1 hour + free-tier signups |
-
-**Suggested next prompts** (paste into a fresh CC session in this repo):
-
-- *"Build the `src/server/` reference REST issuer. Wire together `pkg/types`, `src/registry`, `src/credential`, `src/policy`, and the email + SMS methods into the endpoints sketched in `src/server/README.md`. Use net/http + chi router. Add httptest integration tests. Open a PR."*
-- *"Build `app/web/` as a Next.js 14 App Router enrollment app that calls a local Personhood server at http://localhost:8080. Use the `frontend-design` skill for distinctive styling. Three screens: email entry → SMS entry → credential issued with JSON viewer. Open a PR."*
-- *"Wire real email + SMS delivery: write a `SendGridSender` in `src/methods/email/` and a `TwilioSender` in `src/methods/sms/`, each behind a build tag. Document required env vars."*
-
-The full v0.1 design plan lives at `/Users/sophie.arborbot/.claude/plans/eventual-swinging-stearns.md`. The most recent session wrapup is at `tmp/wrapups/` (gitignored).
+The methods roadmap (which verification methods to add next, with strength scores and effort estimates) lives in `docs/06-methods-catalog.md`.
 
 ## Architecture
 
 Four logical layers, each its own Go module (or set of modules):
 
-1. **Methods** (`src/methods/*`) — pluggable verification methods. v0.1 ships three:
-   - **`phone-liveness`** (anchor, **stub**) — Apple FaceID + App Attest / Android BiometricPrompt + Play Integrity. This is the only **anchor** method in v0.1; every valid credential must include at least one anchor method.
-   - **`email`** (supplementary, ✅ implemented) — magic-link verification.
-   - **`sms`** (supplementary, ✅ implemented) — one-time code verification.
+1. **Methods** (`src/methods/*`) — pluggable verification methods. Each method declares anchor or supplementary type, strength 0–100, cost, UX friction. v0.1 ships three:
+   - **`phone-liveness`** (anchor) — Apple FaceID + App Attest / Android BiometricPrompt + Play Integrity.
+   - **`email`** (supplementary) — magic-link verification.
+   - **`sms`** (supplementary) — 6-digit OTP verification.
+
+   See `STATUS.md` for which of these are implemented vs stub. See `docs/06-methods-catalog.md` for the catalog of additional methods that have been brainstormed for future versions.
 2. **Registry** (`src/registry`) — methods register themselves at startup; the issuer queries this to discover what's available.
 3. **Credential** (`src/credential`) — W3C Verifiable Credential issuer + verifier. Signs with Ed25519.
 4. **Policy** (`src/policy`) — declarative JSON DSL that integrators use to express verification requirements (e.g. "anchor required + 2 supplementary points + verified within last 90 days"). The evaluator checks a presented credential against a policy and returns pass/fail with reasons.
@@ -91,7 +66,9 @@ All Go modules use the `github.com/sagearbor/personhood/` module path prefix. Al
 
 ## Working in This Repo
 
+- **First read for any new session:** this file, then `STATUS.md`. The dev checklist lives in `STATUS.md`.
 - When adding or changing cross-module types, update `pkg/types/types.go` first, then `pkg/proto/` JSON schemas, then propagate to module-local code.
-- New verification methods are added as new Go modules under `src/methods/<name>/`, registered in `go.work`, and exposed through the `Method` interface described in `src/methods/INTERFACE.md`.
+- New verification methods are added as new Go modules under `src/methods/<name>/`, registered in `go.work`, and exposed through the `Method` interface described in `src/methods/INTERFACE.md`. Consult `docs/06-methods-catalog.md` to confirm the method's scoring and rationale before implementing.
 - Don't add a method without an explicit declaration of whether it is an **anchor** or **supplementary** method. The registry's `MethodMetadata.Type` field is load-bearing for policy evaluation.
+- When you complete a checklist item in `STATUS.md`, check the box AND update the "What's implemented" / "What's stub" tables there. Don't put status updates in this file.
 - The full v0.1 design plan lives at `/Users/sophie.arborbot/.claude/plans/eventual-swinging-stearns.md` — read it before making non-trivial design changes.
