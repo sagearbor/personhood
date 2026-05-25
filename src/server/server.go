@@ -169,8 +169,11 @@ func (s *Server) SetCredentialLifetime(d time.Duration) {
 func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
 	reg := registry.New()
 
+	// Sender selection is delegated to the method packages' env-aware
+	// factories so build tags (`-tags sendgrid` / `-tags twilio`) and env
+	// vars together decide between LogSender and the real vendor sender.
 	emailMethod := emailmethod.NewMethod(
-		&emailmethod.LogSender{},
+		emailmethod.NewSenderFromEnv(),
 		magicLinkBaseURL,
 		emailmethod.NewInMemoryStore(),
 	)
@@ -179,7 +182,7 @@ func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
 	}
 
 	smsMethodPlugin := smsmethod.NewMethod(
-		&smsmethod.LogSender{},
+		smsmethod.NewSenderFromEnv(),
 		smsmethod.NewInMemoryStore(),
 	)
 	if err := reg.Register(smsMethodPlugin); err != nil {
