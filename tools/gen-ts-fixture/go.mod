@@ -1,4 +1,4 @@
-module github.com/sagearbor/personhood/sdk/go
+module github.com/sagearbor/personhood/tools/gen-ts-fixture
 
 go 1.22.0
 
