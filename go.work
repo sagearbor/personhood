@@ -4,8 +4,11 @@ use (
 	./pkg/types
 	./sdk/go
 	./src/credential
+	./src/methods/app-attest-device
+	./src/methods/captcha-turnstile
 	./src/methods/email
 	./src/methods/government-id-liveness
+	./src/methods/ip-asn-reputation
 	./src/methods/phone-liveness
 	./src/methods/plaid-bank-link
 	./src/methods/sms

@@ -11,8 +11,11 @@ import (
 
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
+	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
+	captchamethod "github.com/sagearbor/personhood/src/methods/captcha-turnstile"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	govidmethod "github.com/sagearbor/personhood/src/methods/government-id-liveness"
+	ipasnmethod "github.com/sagearbor/personhood/src/methods/ip-asn-reputation"
 	plaidmethod "github.com/sagearbor/personhood/src/methods/plaid-bank-link"
 	smsmethod "github.com/sagearbor/personhood/src/methods/sms"
 	"github.com/sagearbor/personhood/src/registry"
@@ -268,6 +271,47 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 			Handler:  plaid.WebhookHandler(plaidWebhookSecret, nil),
 		})
 	}
+
+	// Register the near-free "floor" supplementary methods (checklist #7). They
+	// add recency/anti-bot signals to every credential but never substitute for
+	// an anchor; integrators require them via docs/policies/default-floor.yaml.
+	// None of these has a webhook (they're synchronous begin/complete), so no
+	// MethodRoutes are added.
+
+	// ip-asn-reputation: always-on with a default (clean) provider so the floor
+	// signal is present out of the box. Production swaps in a real provider
+	// (MaxMind / IPQualityScore) via the ReputationProvider interface.
+	ipasn := ipasnmethod.NewMethod(ipasnmethod.DefaultConfig(ipasnmethod.NewStaticProvider(nil)))
+	if err := reg.Register(ipasn); err != nil {
+		return Dependencies{}, fmt.Errorf("register ip-asn-reputation: %w", err)
+	}
+
+	// captcha-turnstile: registered when Cloudflare Turnstile keys are present.
+	turnstileSiteKey := os.Getenv("TURNSTILE_SITE_KEY")
+	turnstileSecret := os.Getenv("TURNSTILE_SECRET_KEY")
+	if turnstileSiteKey != "" && turnstileSecret != "" {
+		tc, err := captchamethod.NewTurnstileClient(turnstileSiteKey, turnstileSecret, nil)
+		if err != nil {
+			return Dependencies{}, fmt.Errorf("captcha-turnstile: client: %w", err)
+		}
+		if err := reg.Register(captchamethod.NewMethod(captchamethod.Config{TurnstileClient: tc})); err != nil {
+			return Dependencies{}, fmt.Errorf("register captcha-turnstile: %w", err)
+		}
+	}
+
+	// app-attest-device: registered when APP_ATTEST_SECRET is set. v0.1 uses the
+	// HMAC dev verifier; v0.2 swaps in real Apple App Attest / Play Integrity
+	// verification behind the same Verifier interface.
+	if appAttestSecret := os.Getenv("APP_ATTEST_SECRET"); appAttestSecret != "" {
+		appAttest := appattestmethod.NewMethod(appattestmethod.Config{
+			Verifier: appattestmethod.NewHMACDevVerifier(appAttestSecret),
+			Store:    appattestmethod.NewInMemoryStore(),
+		})
+		if err := reg.Register(appAttest); err != nil {
+			return Dependencies{}, fmt.Errorf("register app-attest-device: %w", err)
+		}
+	}
+
 	return deps, nil
 }
 
