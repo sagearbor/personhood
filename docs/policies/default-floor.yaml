@@ -1,0 +1,30 @@
+# Personhood default "floor" policy (DSL v1.0).
+#
+# The floor is the set of near-free supplementary signals every ceremony should
+# carry (checklist #7): app-attest-device (18) + ip-asn-reputation (10) +
+# captcha-turnstile (4) = 32 supplementary points. Together they cost ~$0.001
+# and kill emulator farms, datacenter signups, and naive scripts — without
+# substituting for an anchor.
+#
+# Integrators apply this with the SDK:
+#     v.Verify(ctx, cred, floorPolicy)   // Go
+#     verifier.verify(vcJson, floorPolicy) // TypeScript
+#
+# It demands BOTH an anchor (the one-human guarantee) AND the floor's
+# supplementary points, so a credential built only from email+SMS (12+12=24)
+# fails until the floor methods are present. Tune min_supplementary_points to
+# require more/less of the floor.
+version: "1.0"
+policy_id: "personhood/default-floor/v1"
+action: "Default baseline check (anchor + near-free floor signals)"
+
+# Every valid credential must include an anchor — the floor never substitutes
+# for one (anchor + supplementary design constraint).
+anchor_required: true
+
+# 32 = the three floor methods summed (app-attest 18 + ip-asn 10 + turnstile 4).
+# Anchor methods (strength >= 50) do not count toward this total.
+min_supplementary_points: 32
+
+# Re-verify the anchor at least every 90 days.
+max_anchor_method_age_seconds: 7776000   # 90 days
