@@ -8,6 +8,7 @@ require (
 	github.com/sagearbor/personhood/src/credential v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/email v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/government-id-liveness v0.0.0-00010101000000-000000000000
+	github.com/sagearbor/personhood/src/methods/plaid-bank-link v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/sms v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/registry v0.0.0-00010101000000-000000000000
 )
@@ -19,6 +20,7 @@ replace (
 	github.com/sagearbor/personhood/src/credential => ../credential
 	github.com/sagearbor/personhood/src/methods/email => ../methods/email
 	github.com/sagearbor/personhood/src/methods/government-id-liveness => ../methods/government-id-liveness
+	github.com/sagearbor/personhood/src/methods/plaid-bank-link => ../methods/plaid-bank-link
 	github.com/sagearbor/personhood/src/methods/sms => ../methods/sms
 	github.com/sagearbor/personhood/src/policy => ../policy
 	github.com/sagearbor/personhood/src/registry => ../registry
