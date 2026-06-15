@@ -13,6 +13,7 @@ import (
 	"github.com/sagearbor/personhood/src/credential"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	govidmethod "github.com/sagearbor/personhood/src/methods/government-id-liveness"
+	plaidmethod "github.com/sagearbor/personhood/src/methods/plaid-bank-link"
 	smsmethod "github.com/sagearbor/personhood/src/methods/sms"
 	"github.com/sagearbor/personhood/src/registry"
 )
@@ -234,6 +235,37 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 			Path:     "webhook",
 			Method:   http.MethodPost,
 			Handler:  gov.WebhookHandler(webhookSecret, nil),
+		})
+	}
+
+	// Register plaid-bank-link (anchor #3) when PLAID_CLIENT_ID + PLAID_SECRET
+	// + PLAID_WEBHOOK_SECRET are all set. PLAID_ENV selects sandbox (default)
+	// vs production; PLAID_TEMPLATE_ID is optional.
+	plaidClientID := os.Getenv("PLAID_CLIENT_ID")
+	plaidSecret := os.Getenv("PLAID_SECRET")
+	plaidWebhookSecret := os.Getenv("PLAID_WEBHOOK_SECRET")
+	if plaidClientID != "" && plaidSecret != "" && plaidWebhookSecret != "" {
+		baseURL := plaidmethod.PlaidBaseURLSandbox
+		if os.Getenv("PLAID_ENV") == "production" {
+			baseURL = plaidmethod.PlaidBaseURLProduction
+		}
+		client, err := plaidmethod.NewPlaidClient(plaidClientID, plaidSecret, baseURL, nil)
+		if err != nil {
+			return Dependencies{}, fmt.Errorf("plaid-bank-link: plaid client: %w", err)
+		}
+		client.TemplateID = os.Getenv("PLAID_TEMPLATE_ID")
+		plaid := plaidmethod.NewMethod(plaidmethod.Config{
+			PlaidClient: client,
+			Store:       plaidmethod.NewInMemoryStore(),
+		})
+		if err := reg.Register(plaid); err != nil {
+			return Dependencies{}, fmt.Errorf("register plaid-bank-link: %w", err)
+		}
+		deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
+			MethodID: plaidmethod.MethodID,
+			Path:     "webhook",
+			Method:   http.MethodPost,
+			Handler:  plaid.WebhookHandler(plaidWebhookSecret, nil),
 		})
 	}
 	return deps, nil
