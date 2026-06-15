@@ -33,6 +33,7 @@ cd app/web && npm run build  # 100 kB First Load JS
 | **End-user PWA** | `app/web/` | **Next.js 14 App Router PWA (PR #10)**. Four screens (email → SMS → ID/selfie → credential). PWA manifest + service worker + apple-touch-icon → Add-to-Home-Screen installs a real app icon on Android + iOS. IndexedDB-backed credential vault with optional WebAuthn biometric gating. "Trusted terminal" aesthetic: JetBrains Mono + Plus Jakarta Sans, electric-lime accent on near-black. 100 kB First Load JS. |
 | **Deploy infrastructure** | `Dockerfile`, `fly.toml`, `.dockerignore`, `app/web/vercel.json`, `.github/workflows/build.yml` | **PR #11**. Multi-stage Dockerfile (golang:1.22 → distroless/static-debian12:nonroot, built with sendgrid+twilio tags). Fly.io app config with /healthz, force_https, auto_stop_machines. vercel.json with security headers + camera permissions policy scoped to Persona. CI runs all 4 build configurations + production binary + Next build + Docker image. |
 | **RUNBOOK** | `RUNBOOK.md` | **PR #12**. Clean-machine → verified-on-phone in 45-75 minutes wall clock, ~20 minutes hands-on. Twelve sections covering prereqs, vendor signups (Persona / SendGrid / Twilio / Fly / Vercel), local dev, real-delivery local test, server deploy, web deploy, Persona webhook registration, Add-to-Home-Screen install, on-phone enrollment, troubleshooting (10-row table), cost expectations. |
+| **Integrator SDK (Go)** | `sdk/go/` | Drop-in verifier for services accepting Personhood credentials. `personhood.NewVerifier(TrustedIssuers{...})` + `Verify(ctx, cred, policy)` composes issuer-signature verification, Status List 2021 revocation, and policy evaluation + nullifier derivation into one `Result{OK, Code, Human, Details, Nullifier}`. Options for HTTP client, clock, and revocation-skip. `ParsePolicyYAML/JSON` + `ParseCredential` helpers. 9 tests (OK, unknown-issuer, tampered-sig, anchor-missing, revoked via httptest, bit-clear, resolver-required, parse) green with `-race`; standalone `go.sum` for external (OpenLine) consumption. |
 | Design docs | `docs/` | 5 specs covering architecture, methods, credential format, policy DSL, OpenLine refactor. ~14k words. `docs/02-methods.md` now includes a delivery env-var matrix per vendor + a build-tag matrix. |
 | Methods catalog | `docs/06-methods-catalog.md` | 3-agent brainstorm of ~40 additional methods with comparison table and prioritized roadmap. |
 
@@ -41,7 +42,7 @@ cd app/web && npm run build  # 100 kB First Load JS
 | Module | Path | What's needed | Effort |
 |---|---|---|---|
 | **Anchor method (App Attest)** | `src/methods/phone-liveness/` | Apple App Attest + Google Play Integrity server-side validators; client-side ceremony driver. Was the original v0.1 anchor; superseded for the demo by `government-id-liveness`. Useful for a future native shell that can attest in-app. | ~3–5 days |
-| **Integrator SDKs** | `sdk/go/`, `sdk/typescript/` | Thin wrappers around `src/credential` + `src/policy` for external apps to verify presented credentials. | ~1 day each |
+| **Integrator SDK (TypeScript)** | `sdk/typescript/` | Thin wrapper around the credential + policy logic for external apps to verify presented credentials. (Go SDK shipped — see "What's implemented".) | ~1 day |
 | **Mobile app (Capacitor wrap)** | `app/mobile/` | Sprint 3 — see below. Wrap `app/web` in Capacitor; ship to Play Store internal track. | ~3–5 days incl. store paperwork |
 | **Signed status list** | `src/credential/` + `src/server/` | The `/v1/status-list/{id}` endpoint currently returns an unsigned placeholder. v0.2 will sign it like a normal credential. | ~½ day |
 | **did:key holder DIDs** | `src/server/did.go` | Currently emits `did:personhood:holder:<sha256>` to avoid a base58 dep. v0.2 web app generates a WebCrypto Ed25519 keypair and provides the public key in `/enrollment/start`. | ~1 day |
@@ -133,7 +134,7 @@ See `docs/06-methods-catalog.md` for the full ~40-method catalog with recommenda
 
 Once Sprint 1 ships, OpenLine (sibling repo at `/Users/sophie.arborbot/PROJECTS/github_repos/openline/`) can start refactoring `src/suffrage/` and `src/commons/` to verify Personhood credentials. The detailed plan is at `docs/05-openline-refactor.md` — broadly:
 
-1. OpenLine adds Go dependency on `github.com/sagearbor/personhood/sdk/go` (need SDK first — see backlog).
+1. OpenLine adds Go dependency on `github.com/sagearbor/personhood/sdk/go` (✅ Go SDK now shipped — see "What's implemented").
 2. Suffrage vote-eligibility check refactors to: `personhood.Verify(vc, vote_policy)`.
 3. Commons UBI claim refactors to: `personhood.Verify(vc, ubi_policy)` + nullifier check.
 4. Move `openline/src/suffrage/accumulator/` → `personhood/` (identity-set-membership infra).
