@@ -28,6 +28,7 @@ cd app/web && npm run build  # 100 kB First Load JS
 | Policy DSL | `src/policy/` | YAML + JSON parser; evaluator returns all 11 `EvaluationCode` outcomes. Refuses naive supplementary stacking when `anchor_required: true`. Pedersen-binding → nullifier (SHA-256 stub for v0.1). |
 | Email method | `src/methods/email/` | Magic-link, 32-byte token, 15-min TTL, disposable-domain blocklist. `LogSender` default; **SendGridSender** behind `-tags sendgrid` (PR #9). |
 | SMS method | `src/methods/sms/` | 6-digit OTP, 5-min TTL, 3-attempt lockout, constant-time compare, fictional-555/VOIP heuristic. `LogSender` default; **TwilioSender** behind `-tags twilio` (PR #9). |
+| **Email-tier method** | `src/methods/email-tier/` | Strength-22 upgrade for `email` (checklist #8). Same magic-link ceremony + pluggable `EnrichmentProvider`: offline `DomainReputation` classifier + HaveIBeenPwned breach-presence. `NeutralProvider` dev default; `HIBPProvider` behind `HIBP_API_KEY`. Signal folded into the attestation digest. Registered additively alongside `email` when `HIBP_API_KEY` set. 13 tests with `-race`. |
 | **Government-ID + selfie anchor** | `src/methods/government-id-liveness/` | **Persona** hosted-flow wrapper (PR #8). Strength 90, anchor. HMAC-validated webhook handler, in-memory result store, status mapping (approved/declined/needs_review/expired). |
 | **Bank-link anchor** | `src/methods/plaid-bank-link/` | **Plaid** Hosted Link wrapper (checklist #6). Strength 88, anchor, ~$1.50, med friction. Client (`/link/token/create` + `hosted_link_url`), in-memory store keyed by link token, HMAC-validated `LINK`/`SESSION_FINISHED` webhook, status mapping. Auto-registers in the server when `PLAID_*` env present. 14 tests with `-race`. Not airdrop-test compatible (requires a bank). |
 | **Floor: device attestation** | `src/methods/app-attest-device/` | Supplementary (strength 18, free). Apple App Attest / Google Play Integrity standalone. Server-issued challenge nonce + pluggable `Verifier` (v0.1 HMAC dev verifier; real Apple/Google = v0.2). Registers when `APP_ATTEST_SECRET` set. |
@@ -88,6 +89,8 @@ Tackle in order. Each item is sized to be one PR. Copy any of the **bold prompts
 
 - [ ] **8. Upgrade existing `email` → `email-tier` and `sms` → `phone-carrier-tier`.**
   > *Per `docs/06-methods-catalog.md`, replace the strength-8 plain email with the strength-22 tiered variant (domain rep + breach-presence via HaveIBeenPwned). Replace strength-12 plain SMS with strength-28 tiered variant (line tenure + porting history via Twilio Lookup or Telesign). Open one PR per method.*
+  > - ✅ **email-tier** built (`feat/email-tier`, PR open for review). Strength 22, `HIBPProvider` behind `HIBP_API_KEY`, registered additively. Not yet swapped into the web app's email screen (kept non-breaking).
+  > - ⬜ **phone-carrier-tier** — next.
 
 - [ ] **9. Add `paid-billing-card` supplementary (strongest single supplementary).**
   > *Build `src/methods/paid-billing-card/` wrapping Stripe SetupIntent with $0 pre-auth + 3DS/SCA. Strength 35. Open a PR.*
