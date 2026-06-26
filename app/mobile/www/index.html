@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Personhood</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #0a0a0a;
+        color: #e8e8e8;
+        font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        padding: 2rem;
+        box-sizing: border-box;
+      }
+      .accent { color: #c6ff3a; }
+      .muted { color: #8a8a8a; font-size: 0.85rem; line-height: 1.6; }
+      h1 { font-weight: 600; letter-spacing: -0.02em; }
+    </style>
+  </head>
+  <body>
+    <!--
+      This page is the Capacitor `webDir` fallback. It is shown ONLY if the
+      shell cannot reach the live PWA configured in capacitor.config.ts
+      (server.url). In normal operation the native shell loads the network app
+      and this file is never displayed.
+    -->
+    <main>
+      <h1>Person<span class="accent">hood</span></h1>
+      <p class="muted">
+        Couldn't reach the enrollment app.<br />
+        Check your connection and reopen Personhood.
+      </p>
+    </main>
+  </body>
+</html>
