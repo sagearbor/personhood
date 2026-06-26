@@ -48,7 +48,7 @@ cd app/web && npm run build  # 100 kB First Load JS
 | Module | Path | What's needed | Effort |
 |---|---|---|---|
 | **Anchor method (App Attest)** | `src/methods/phone-liveness/` | Apple App Attest + Google Play Integrity server-side validators; client-side ceremony driver. Was the original v0.1 anchor; superseded for the demo by `government-id-liveness`. Useful for a future native shell that can attest in-app. | ~3–5 days |
-| **Mobile app (Capacitor wrap)** | `app/mobile/` | Sprint 3 — see below. Wrap `app/web` in Capacitor; ship to Play Store internal track. | ~3–5 days incl. store paperwork |
+| **Mobile app (Capacitor wrap)** | `app/mobile/` | Sprint 3 — see below. Capacitor 6 shell **scaffolded** (checklist #3a): `capacitor.config.ts` loads the live PWA via `server.url` (OTA), `allowNavigation` covers the Persona/Plaid/Stripe hosted flows, offline fallback page, package.json + .gitignore. Native projects + Play Integrity/App Attest (#3b) + store builds (#3c/#3d) still require dev accounts/devices. | ~2–4 days incl. store paperwork |
 | **Signed status list** | `src/credential/` + `src/server/` | The `/v1/status-list/{id}` endpoint currently returns an unsigned placeholder. v0.2 will sign it like a normal credential. | ~½ day |
 | **did:key holder DIDs** | `src/server/did.go` | Currently emits `did:personhood:holder:<sha256>` to avoid a base58 dep. v0.2 web app generates a WebCrypto Ed25519 keypair and provides the public key in `/enrollment/start`. | ~1 day |
 | **Redis-backed stores** | `src/server/session.go`, `src/methods/{email,sms,government-id-liveness}/store.go` | All four stores are in-memory; horizontal scaling needs a shared backend. | ~½ day |
@@ -96,8 +96,8 @@ Tackle in order. Each item is sized to be one PR. Copy any of the **bold prompts
 
 Once the PWA is live on a real domain (Sprint 1 outcome above), Sprint 3 ships it through the Play Store. The web app does the heavy lifting; Capacitor is just a native shell that loads it and adds the device APIs PWAs can't reach (FCM push, App Attest / Play Integrity).
 
-- [ ] **3a. Scaffold Capacitor under `app/mobile/`.**
-  > *Initialise a Capacitor 6 project that loads `https://<your-web>.vercel.app` (the live PWA). Configure for both Android and iOS. Wire `capacitor.config.ts` with `server.url` so OTA updates of the web app reach the wrapped app without a store roll. Open a PR.*
+- [x] **3a. Scaffold Capacitor under `app/mobile/`.** ✅ (`feat/mobile-capacitor-scaffold`, PR open)
+  > *Capacitor 6 shell scaffolded: `capacitor.config.ts` loads the live PWA via `server.url` (read from `PERSONHOOD_WEB_URL`) for OTA updates without a store roll; configured for Android + iOS; `allowNavigation` covers the Persona/Plaid/Stripe hosted flows; `www/index.html` offline fallback; `package.json` (@capacitor/{core,cli,android,ios,app}) + `.gitignore` (native projects + signing material not committed). Native projects are generated locally with `npx cap add` — see `app/mobile/README.md`.*
 
 - [ ] **3b. Wire Google Play Integrity + Apple App Attest as a second anchor.**
   > *Inside the Capacitor wrapper, call Play Integrity on launch and post the attestation token to `src/methods/phone-liveness/` (the existing stub). On iOS, do the same with App Attest. This re-enables the original v0.1 anchor — useful for issuers that want one-Sybil-defeating signal without ID upload. Open a PR.*

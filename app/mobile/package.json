@@ -1,0 +1,28 @@
+{
+  "name": "@personhood/mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Personhood mobile shell — Capacitor 6 wrapper around the live enrollment PWA (app/web)",
+  "scripts": {
+    "sync": "cap sync",
+    "add:android": "cap add android",
+    "add:ios": "cap add ios",
+    "open:android": "cap open android",
+    "open:ios": "cap open ios",
+    "build:android": "cap sync android && cap build android",
+    "build:ios": "cap sync ios && cap build ios",
+    "doctor": "cap doctor"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.0",
+    "@capacitor/app": "^6.0.0",
+    "@capacitor/core": "^6.1.0",
+    "@capacitor/ios": "^6.1.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.0"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  }
+}
