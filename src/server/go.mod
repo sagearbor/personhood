@@ -9,6 +9,7 @@ require (
 	github.com/sagearbor/personhood/src/methods/app-attest-device v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/captcha-turnstile v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/email v0.0.0-00010101000000-000000000000
+	github.com/sagearbor/personhood/src/methods/email-tier v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/government-id-liveness v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/ip-asn-reputation v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/plaid-bank-link v0.0.0-00010101000000-000000000000
@@ -24,6 +25,7 @@ replace (
 	github.com/sagearbor/personhood/src/methods/app-attest-device => ../methods/app-attest-device
 	github.com/sagearbor/personhood/src/methods/captcha-turnstile => ../methods/captcha-turnstile
 	github.com/sagearbor/personhood/src/methods/email => ../methods/email
+	github.com/sagearbor/personhood/src/methods/email-tier => ../methods/email-tier
 	github.com/sagearbor/personhood/src/methods/government-id-liveness => ../methods/government-id-liveness
 	github.com/sagearbor/personhood/src/methods/ip-asn-reputation => ../methods/ip-asn-reputation
 	github.com/sagearbor/personhood/src/methods/plaid-bank-link => ../methods/plaid-bank-link
