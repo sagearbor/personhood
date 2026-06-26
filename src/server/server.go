@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	govidmethod "github.com/sagearbor/personhood/src/methods/government-id-liveness"
 	ipasnmethod "github.com/sagearbor/personhood/src/methods/ip-asn-reputation"
+	carriertiermethod "github.com/sagearbor/personhood/src/methods/phone-carrier-tier"
 	plaidmethod "github.com/sagearbor/personhood/src/methods/plaid-bank-link"
 	smsmethod "github.com/sagearbor/personhood/src/methods/sms"
 	"github.com/sagearbor/personhood/src/registry"
@@ -34,10 +36,10 @@ import (
 type Server struct {
 	cfg Config
 
-	issuerDID          types.DID
-	issuerVMethodID    string
-	issuerPublicKey    ed25519.PublicKey
-	statusListURL      string
+	issuerDID       types.DID
+	issuerVMethodID string
+	issuerPublicKey ed25519.PublicKey
+	statusListURL   string
 
 	registry *registry.Registry
 	issuer   *credential.Issuer
@@ -312,7 +314,37 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		}
 	}
 
+	// phone-carrier-tier (checklist #8): the strength-28 upgrade for plain SMS
+	// (line-type intelligence + SIM-swap/porting via Twilio Lookup). Registered
+	// additively alongside `sms` when Twilio credentials are present, so the
+	// strength-28 rating is only advertised when the real carrier provider is
+	// wired. It reuses the env-aware sms sender (Twilio behind `-tags twilio`,
+	// LogSender otherwise) via a thin interface adapter. The intended end-state
+	// is to retire plain `sms` in favor of this once the web app threads the
+	// carrier fields; until then both coexist.
+	if os.Getenv("TWILIO_ACCOUNT_SID") != "" && os.Getenv("TWILIO_AUTH_TOKEN") != "" {
+		carrierTier := carriertiermethod.NewMethod(carriertiermethod.Config{
+			Sender:   smsTierSenderAdapter{inner: smsmethod.NewSenderFromEnv()},
+			Store:    carriertiermethod.NewInMemoryStore(),
+			Provider: carriertiermethod.NewProviderFromEnv(),
+		})
+		if err := reg.Register(carrierTier); err != nil {
+			return Dependencies{}, fmt.Errorf("register phone-carrier-tier: %w", err)
+		}
+	}
+
 	return deps, nil
+}
+
+// smsTierSenderAdapter bridges the sms module's Sender to the phone-carrier-tier
+// module's Sender. The two interfaces are structurally identical; the adapter
+// lets the issuer reuse the existing env-aware (Twilio / Log) SMS delivery for
+// the tiered method without duplicating the vendor integration.
+type smsTierSenderAdapter struct{ inner smsmethod.Sender }
+
+// Send implements carriertiermethod.Sender.
+func (a smsTierSenderAdapter) Send(ctx context.Context, toPhone, body string) error {
+	return a.inner.Send(ctx, toPhone, body)
 }
 
 // absoluteURL joins base + path safely. Returns an error if base is not a
