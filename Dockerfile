@@ -17,19 +17,17 @@ FROM golang:${GO_VERSION}-bookworm AS builder
 
 WORKDIR /src
 
-# Copy the workspace and every module. go.work lists each module directory,
-# and `go mod download` refuses to run when any listed directory lacks its
-# go.mod — so we copy the full source tree (small: a few hundred KB) rather
-# than hand-listing go.mod files that go stale every time a method is added.
+# Build the server as a standalone module (GOWORK=off): src/server/go.mod
+# carries a `replace` for every sibling module it needs, so the image build
+# does not depend on go.work at all. go.work is a developer-workspace
+# convenience that also lists test/tool modules the binary never needs — a
+# previous version of this file broke every time a module was added there.
 # The .dockerignore keeps host artifacts (node_modules, .next, docs, app/)
-# out of the build context. Module downloads and the build cache are kept in
-# BuildKit cache mounts, so rebuilds stay fast even without a separate
-# go.mod-only layer.
-COPY go.work go.work.sum* ./
+# out of the build context.
+ENV GOWORK=off
 COPY pkg     pkg
 COPY src     src
 COPY sdk     sdk
-COPY tools   tools
 
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
