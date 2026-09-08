@@ -115,7 +115,7 @@ go run ./src/server/cmd/server                     # serves on :8080
 cd app/web && npm install && npm run dev           # http://localhost:3000
 ```
 
-A longer clean-machine-to-verified-on-phone walkthrough (vendor signups, deploy config, on-phone enrollment) lives in [`RUNBOOK.md`](RUNBOOK.md).
+A longer clean-machine-to-verified-on-phone walkthrough (vendor signups, deploy config, on-phone enrollment) lives in [`RUNBOOK.md`](RUNBOOK.md). To onboard a friend on the email-only first round, hand them [`FRIENDS.md`](FRIENDS.md). `bash scripts/test-all.sh` runs every module's tests; `bash scripts/e2e-email.sh` proves the enrollment path against a real server process.
 
 ## What's in v0.1
 
