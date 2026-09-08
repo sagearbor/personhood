@@ -15,6 +15,7 @@ import (
 	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
 	captchamethod "github.com/sagearbor/personhood/src/methods/captcha-turnstile"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
+	emailtiermethod "github.com/sagearbor/personhood/src/methods/email-tier"
 	govidmethod "github.com/sagearbor/personhood/src/methods/government-id-liveness"
 	ipasnmethod "github.com/sagearbor/personhood/src/methods/ip-asn-reputation"
 	carriertiermethod "github.com/sagearbor/personhood/src/methods/phone-carrier-tier"
@@ -333,6 +334,26 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		}
 	}
 
+	// email-tier (checklist #8): the strength-22 upgrade for plain email
+	// (domain reputation + HaveIBeenPwned breach-presence). Registered
+	// additively alongside `email` when HIBP_API_KEY is present, so the
+	// strength-22 rating is only advertised when the real enrichment provider
+	// is wired. It reuses the env-aware email sender (SendGrid behind
+	// `-tags sendgrid`, LogSender otherwise) via a thin interface adapter.
+	// The intended end-state is to retire plain `email` in favor of this once
+	// the web app threads the enrichment fields; until then both coexist.
+	if os.Getenv("HIBP_API_KEY") != "" {
+		emailTier := emailtiermethod.NewMethod(emailtiermethod.Config{
+			Sender:   emailTierSenderAdapter{inner: emailmethod.NewSenderFromEnv()},
+			BaseURL:  magicLinkBaseURL,
+			Store:    emailtiermethod.NewInMemoryStore(),
+			Provider: emailtiermethod.NewProviderFromEnv(),
+		})
+		if err := reg.Register(emailTier); err != nil {
+			return Dependencies{}, fmt.Errorf("register email-tier: %w", err)
+		}
+	}
+
 	return deps, nil
 }
 
@@ -345,6 +366,17 @@ type smsTierSenderAdapter struct{ inner smsmethod.Sender }
 // Send implements carriertiermethod.Sender.
 func (a smsTierSenderAdapter) Send(ctx context.Context, toPhone, body string) error {
 	return a.inner.Send(ctx, toPhone, body)
+}
+
+// emailTierSenderAdapter bridges the email module's Sender to the email-tier
+// module's Sender. The two interfaces are structurally identical; the adapter
+// lets the issuer reuse the existing env-aware (SendGrid / Log) email delivery
+// for the tiered method without duplicating the vendor integration.
+type emailTierSenderAdapter struct{ inner emailmethod.Sender }
+
+// Send implements emailtiermethod.Sender.
+func (a emailTierSenderAdapter) Send(ctx context.Context, to, subject, magicLinkURL string) error {
+	return a.inner.Send(ctx, to, subject, magicLinkURL)
 }
 
 // absoluteURL joins base + path safely. Returns an error if base is not a
