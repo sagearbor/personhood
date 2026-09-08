@@ -200,6 +200,55 @@ section below explains what to copy and where to find it.
    the **Mail Send** permission. Copy the `SG.xxxxx...` value — this is
    `SENDGRID_API_KEY`. Shown once.
 
+### 3b-alt. Generic SMTP (no SendGrid signup — Gmail app password, Fastmail, etc.)
+
+If you'd rather not create a SendGrid account, `src/methods/email` ships a
+second, always-compiled `Sender` (`SMTPSender`, stdlib `net/smtp`, no build
+tag) that talks to any SMTP relay. Set these instead of the `SENDGRID_*`
+vars:
+
+| Env var | Example | Notes |
+|---|---|---|
+| `SMTP_HOST` | `smtp.gmail.com` | or `smtp.fastmail.com`, your own relay, etc. |
+| `SMTP_PORT` | `587` | STARTTLS (default if unset). Use `465` for implicit TLS. |
+| `SMTP_USER` | `you@gmail.com` | omit entirely for an open relay that needs no auth. |
+| `SMTP_PASS` | a 16-char **app password**, not your login password | see below. |
+| `SMTP_FROM` | `you@gmail.com` | must be a mailbox `SMTP_USER` is allowed to send as. |
+
+**Gmail app password:** enable 2-Step Verification on the Google account,
+then visit <https://myaccount.google.com/apppasswords>, create an app
+password for "Mail", and use the 16-character value (spaces stripped) as
+`SMTP_PASS`. Gmail caps free accounts around 500 messages/day — plenty for a
+friends-and-family round 1.
+
+**Fastmail:** <https://www.fastmail.com/settings/security/apppasswords> →
+new app password scoped to "SMTP" → use as `SMTP_PASS` with `SMTP_HOST=smtp.fastmail.com`.
+
+`email.NewSenderFromEnv()` (`src/methods/email/factory.go`) prefers a
+sendgrid-tagged build with `SENDGRID_API_KEY`+`SENDGRID_FROM` set, then falls
+back to `SMTPSender` when `SMTP_HOST`+`SMTP_FROM` are set, then falls back to
+`LogSender`. You can build and deploy the **default** binary (no
+`-tags sendgrid` needed) and use SMTP exclusively; `SMTPSender` is covered by
+a fake-SMTP-server unit test (`src/methods/email/smtp_sender_test.go`,
+runs in `bash scripts/test-all.sh`, no network needed) and notes in
+`src/methods/email/README.md`.
+
+**Sanity-check credentials before wiring them into Fly:**
+
+```bash
+export PATH=$PWD/tmp/go/bin:$PATH   # if using the private Go toolchain
+SMTP_HOST=smtp.gmail.com SMTP_PORT=587 \
+SMTP_USER=you@gmail.com SMTP_PASS='xxxx xxxx xxxx xxxx' \
+SMTP_FROM=you@gmail.com \
+go run ./src/server/cmd/server &   # or the compiled binary; local dev only
+# then trigger an enrollment (curl or the web app) and confirm the mail
+# actually lands in the recipient inbox, not just that Send() returned nil.
+```
+
+For the round-1 `fly secrets set` step in §2b, swap
+`SENDGRID_API_KEY SENDGRID_FROM` for `SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS SMTP_FROM`
+if you're using SMTP instead of SendGrid.
+
 ### 3c. Twilio (SMS OTP)
 
 1. Visit <https://www.twilio.com/try-twilio> and sign up. They give you a
