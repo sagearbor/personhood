@@ -155,6 +155,64 @@ func NullifierBindingForHolder(holderPublicKey ed25519.PublicKey) *types.Nullifi
 	}
 }
 
+// NullifierBindingForBiometricCommitment derives a NullifierBinding from the
+// fuzzy-extractor-selfie anchor's AttestationDigest (a hex-encoded
+// fuzzyextractorselfie.Commitment — see that package's doc comment), or nil
+// if commitmentHex is empty.
+//
+// This exists alongside NullifierBindingForHolder (device-keypair-derived)
+// because a device keypair is not what STATUS.md checklist #10a's airdrop-
+// test anchor needs to bind a nullifier to: a holder can generate an
+// unlimited number of fresh Ed25519 keypairs, each yielding a distinct
+// NullifierBindingForHolder commitment, so a device-key-only nullifier
+// cannot by itself stop one person from claiming an OpenLine UBI payout
+// (or vote) more than once. fuzzy-extractor-selfie's AttestationDigest, by
+// contrast, is derived from the person's BIOMETRIC (see
+// fuzzy-extractor-selfie/extractor.go): the accumulator (Sybil check)
+// already guarantees that digest is stable across separate sessions for the
+// same person and unique across distinct people, independent of which
+// device key they used. Binding the nullifier to it instead closes the
+// device-keypair-regeneration loophole for holders anchored this way.
+//
+// handleIssueCredential (see handlers.go) prefers this over
+// NullifierBindingForHolder whenever the session's verified methods include
+// a successful fuzzy-extractor-selfie result — see
+// biometricCommitmentFromVerifiedMethods.
+//
+// Same v0.1 stub-crypto caveat as NullifierBindingForHolder: a real Pedersen
+// commitment over BN254 belongs here eventually; SHA-256 over a domain tag
+// plus the commitment hex is a deterministic, non-malleable stand-in that
+// needs no new dependency.
+func NullifierBindingForBiometricCommitment(commitmentHex string) *types.NullifierBinding {
+	if commitmentHex == "" {
+		return nil
+	}
+	h := sha256.New()
+	h.Write([]byte("personhood-nullifier-binding-biometric-v1"))
+	h.Write([]byte(commitmentHex))
+	return &types.NullifierBinding{
+		Commitment: hex.EncodeToString(h.Sum(nil)),
+		Curve:      "bn254",
+		Scheme:     "pedersen-v1",
+	}
+}
+
+// biometricCommitmentFromVerifiedMethods scans verifiedMethods for a
+// successful fuzzy-extractor-selfie result and returns its AttestationDigest
+// (empty string if none is present). Takes methodID as a parameter (rather
+// than importing the fuzzy-extractor-selfie package's MethodID constant
+// directly) to keep did.go independent of any specific method package;
+// server.go's BuildDependencies / handlers.go's handleIssueCredential pass
+// fuzzyextractorselfie.MethodID.
+func biometricCommitmentFromVerifiedMethods(verifiedMethods []types.VerifiedMethod, methodID string) string {
+	for _, vm := range verifiedMethods {
+		if vm.MethodID == methodID && vm.AttestationDigest != "" {
+			return vm.AttestationDigest
+		}
+	}
+	return ""
+}
+
 // IssuerDIDDocument is the minimal subset of a W3C DID document the issuer
 // publishes at /.well-known/did.json. v0.1 advertises a single Ed25519 key
 // as a JWK; multibase-base58btc encoding is deferred to v0.2 (see notes in

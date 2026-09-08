@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
+	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
 )
 
 // startEnrollmentRequest is the JSON body of POST /enrollment/start.
@@ -353,6 +354,17 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	// so such credentials are issued without a nullifierBinding and fail
 	// closed against any policy with nullifier_required: true.
 	nullifierBinding := NullifierBindingForHolder(view.HolderPublicKey)
+	// When the session's verified methods include a successful
+	// fuzzy-extractor-selfie anchor (checklist #10a), prefer deriving the
+	// nullifierBinding from ITS biometric commitment instead: a device
+	// keypair can be regenerated at will, but the biometric commitment is
+	// stable per-person (enforced by the method's Accumulator dedup check)
+	// and unique across people. See NullifierBindingForBiometricCommitment's
+	// doc comment for why this matters for OpenLine's airdrop-test UBI/vote
+	// use cases.
+	if bio := biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.MethodID); bio != "" {
+		nullifierBinding = NullifierBindingForBiometricCommitment(bio)
+	}
 	cred, err := s.issuer.Issue(view.HolderDID, view.VerifiedMethods, view.AnchorMethodID, nullifierBinding, issuedAt, expiresAt, nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue_failed", err.Error())

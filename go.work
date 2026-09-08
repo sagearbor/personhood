@@ -9,6 +9,7 @@ use (
 	./src/methods/captcha-turnstile
 	./src/methods/email
 	./src/methods/email-tier
+	./src/methods/fuzzy-extractor-selfie
 	./src/methods/government-id-liveness
 	./src/methods/ip-asn-reputation
 	./src/methods/paid-billing-card
@@ -16,6 +17,7 @@ use (
 	./src/methods/phone-liveness
 	./src/methods/plaid-bank-link
 	./src/methods/sms
+	./src/methods/social-vouching
 	./src/policy
 	./src/registry
 	./src/server

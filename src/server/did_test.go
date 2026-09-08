@@ -200,3 +200,61 @@ func TestNullifierBindingForHolder_DeterministicAndDistinct(t *testing.T) {
 		t.Error("commitment should not be empty")
 	}
 }
+
+func TestNullifierBindingForBiometricCommitment_NilWithoutCommitment(t *testing.T) {
+	if b := NullifierBindingForBiometricCommitment(""); b != nil {
+		t.Errorf("expected nil binding for an empty commitment, got %+v", b)
+	}
+}
+
+func TestNullifierBindingForBiometricCommitment_DeterministicAndDistinct(t *testing.T) {
+	b1a := NullifierBindingForBiometricCommitment("aaaa")
+	b1b := NullifierBindingForBiometricCommitment("aaaa")
+	b2 := NullifierBindingForBiometricCommitment("bbbb")
+
+	if b1a == nil || b1b == nil || b2 == nil {
+		t.Fatal("expected non-nil bindings for non-empty commitments")
+	}
+	if b1a.Commitment != b1b.Commitment {
+		t.Errorf("same biometric commitment produced different bindings: %q vs %q", b1a.Commitment, b1b.Commitment)
+	}
+	if b1a.Commitment == b2.Commitment {
+		t.Errorf("different biometric commitments produced the same binding: %q", b1a.Commitment)
+	}
+	if b1a.Curve != "bn254" || b1a.Scheme != "pedersen-v1" {
+		t.Errorf("unexpected curve/scheme: %+v", b1a)
+	}
+}
+
+func TestNullifierBindingForBiometricCommitment_DistinctFromHolderBinding(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holderBinding := NullifierBindingForHolder(pub)
+	// Deliberately reuse the holder binding's own commitment as if it were a
+	// biometric digest, to prove the two derivation functions use distinct
+	// domain tags (and therefore can never collide even given the same
+	// input bytes).
+	bioBinding := NullifierBindingForBiometricCommitment(holderBinding.Commitment)
+	if bioBinding.Commitment == holderBinding.Commitment {
+		t.Error("biometric and holder-key nullifier bindings must use distinct domain tags")
+	}
+}
+
+func TestBiometricCommitmentFromVerifiedMethods(t *testing.T) {
+	const fakeMethodID = "fuzzy-extractor-selfie"
+	vms := []types.VerifiedMethod{
+		{MethodID: "email", AttestationDigest: "email-digest"},
+		{MethodID: fakeMethodID, AttestationDigest: "bio-digest"},
+	}
+	if got := biometricCommitmentFromVerifiedMethods(vms, fakeMethodID); got != "bio-digest" {
+		t.Errorf("biometricCommitmentFromVerifiedMethods = %q, want bio-digest", got)
+	}
+	if got := biometricCommitmentFromVerifiedMethods(vms, "not-registered"); got != "" {
+		t.Errorf("biometricCommitmentFromVerifiedMethods for an absent method = %q, want empty", got)
+	}
+	if got := biometricCommitmentFromVerifiedMethods(nil, fakeMethodID); got != "" {
+		t.Errorf("biometricCommitmentFromVerifiedMethods on nil slice = %q, want empty", got)
+	}
+}
