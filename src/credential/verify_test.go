@@ -158,6 +158,51 @@ func TestVerifier_Verify_MultibaseRejectedV01(t *testing.T) {
 	}
 }
 
+// TestVerifier_Verify_ProofValueStartingWithZ guards against a regression
+// where a genuine base64url signature that happens to begin with 'z' was
+// mistaken for a multibase-base58-btc value and rejected. Roughly 1 in 64
+// signatures starts with 'z', so we issue credentials with varying holders
+// until we hit one and assert it verifies.
+func TestVerifier_Verify_ProofValueStartingWithZ(t *testing.T) {
+	t.Parallel()
+	pub, priv := deterministicKey(t, 0x99)
+	issuer := NewIssuer("did:web:issuer.example", "key-1", priv, "")
+	v := NewVerifier(MapResolver{"did:web:issuer.example": pub})
+	issuedAt := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	anchor := "phone-liveness"
+
+	found := false
+	for i := 0; i < 2000 && !found; i++ {
+		holder := types.DID("did:key:zholder-" + strings.Repeat("a", i%7) + "-" + itoa(i))
+		cred, err := issuer.Issue(holder, sampleMethods(t, issuedAt), &anchor, nil, issuedAt, issuedAt.Add(24*time.Hour), nil)
+		if err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		if !strings.HasPrefix(cred.Proof.ProofValue, "z") {
+			continue
+		}
+		found = true
+		if err := v.Verify(context.Background(), cred); err != nil {
+			t.Fatalf("a genuine signature starting with 'z' must verify; got %v (proofValue %q)", err, cred.Proof.ProofValue)
+		}
+	}
+	if !found {
+		t.Fatal("no proofValue starting with 'z' in 2000 issuances; expected ~31")
+	}
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	return string(b)
+}
+
 func TestMapResolver(t *testing.T) {
 	t.Parallel()
 	pub, _ := deterministicKey(t, 0x22)
