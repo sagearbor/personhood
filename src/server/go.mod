@@ -13,6 +13,7 @@ require (
 	github.com/sagearbor/personhood/src/methods/ip-asn-reputation v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/plaid-bank-link v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/sms v0.0.0-00010101000000-000000000000
+	github.com/sagearbor/personhood/src/policy v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/registry v0.0.0-00010101000000-000000000000
 )
 
