@@ -18,6 +18,7 @@ import (
 	emailtiermethod "github.com/sagearbor/personhood/src/methods/email-tier"
 	govidmethod "github.com/sagearbor/personhood/src/methods/government-id-liveness"
 	ipasnmethod "github.com/sagearbor/personhood/src/methods/ip-asn-reputation"
+	paidcardmethod "github.com/sagearbor/personhood/src/methods/paid-billing-card"
 	carriertiermethod "github.com/sagearbor/personhood/src/methods/phone-carrier-tier"
 	plaidmethod "github.com/sagearbor/personhood/src/methods/plaid-bank-link"
 	smsmethod "github.com/sagearbor/personhood/src/methods/sms"
@@ -313,6 +314,38 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		if err := reg.Register(appAttest); err != nil {
 			return Dependencies{}, fmt.Errorf("register app-attest-device: %w", err)
 		}
+	}
+
+	// paid-billing-card (checklist #9): the strongest single supplementary
+	// (strength 35) — a $0 Stripe SetupIntent with 3DS/SCA. Registered when
+	// STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET are set; STRIPE_PUBLISHABLE_KEY
+	// is passed through to the client so Stripe.js can confirm the card.
+	// STRIPE_BASE_URL overrides the API root (default https://api.stripe.com).
+	stripeSecret := os.Getenv("STRIPE_SECRET_KEY")
+	stripeWebhookSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
+	if stripeSecret != "" && stripeWebhookSecret != "" {
+		baseURL := os.Getenv("STRIPE_BASE_URL")
+		if baseURL == "" {
+			baseURL = paidcardmethod.StripeBaseURL
+		}
+		stripeClient, err := paidcardmethod.NewStripeClient(stripeSecret, baseURL, nil)
+		if err != nil {
+			return Dependencies{}, fmt.Errorf("paid-billing-card: stripe client: %w", err)
+		}
+		paidCard := paidcardmethod.NewMethod(paidcardmethod.Config{
+			StripeClient:   stripeClient,
+			Store:          paidcardmethod.NewInMemoryStore(),
+			PublishableKey: os.Getenv("STRIPE_PUBLISHABLE_KEY"),
+		})
+		if err := reg.Register(paidCard); err != nil {
+			return Dependencies{}, fmt.Errorf("register paid-billing-card: %w", err)
+		}
+		deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
+			MethodID: paidcardmethod.MethodID,
+			Path:     "webhook",
+			Method:   http.MethodPost,
+			Handler:  paidCard.WebhookHandler(stripeWebhookSecret, nil),
+		})
 	}
 
 	// phone-carrier-tier (checklist #8): the strength-28 upgrade for plain SMS
