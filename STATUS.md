@@ -6,17 +6,40 @@
 
 ---
 
-## Current state — last updated 2026-05-25 (post-deployment-sprint)
+## Current state — last updated 2026-09-08 (overnight round-1 session)
 
-`main` is **about to merge a 7-PR stack** that takes Personhood from a backend-only library to an end-to-end deployable system you can install on an Android phone today. PRs #7–#12 (see `gh pr list`) are stacked on top of one another and not yet merged — reviewers should walk the stack in order. All tests pass with `-race` in every build configuration.
+`main` is green in CI again (it had been red since 2026-06-15: the Dockerfile
+missed newly added go.work modules — fixed in #28, and the image now builds
+with `GOWORK=off` so go.work changes cannot break it). The **round-1 path is
+real**: a friend with only an email address enrolls, the web app notices the
+magic-link click by polling `/v1/sessions/{id}`, the issuer signs an
+email-only credential, and `tools/verify-credential` accepts it against
+`docs/policies/round1-email.yaml`. That flow was driven through a real
+browser and is pinned by `tests/TestE2E_EmailOnlyEnrollment` (real server
+binary on a loopback port) plus `scripts/e2e-email.sh` in CI. The magic link
+is no longer returned to the client that asked for it (#29). A verifier bug
+that rejected ~1.5% of genuine credentials (base64url signatures beginning
+with `z`) is fixed (#31). All open method PRs (#23 email-tier, #24
+phone-carrier-tier, #25 paid-billing-card) and the README rewrite (#27) are
+merged; the Capacitor scaffold (#26) is closed until the PWA has a live URL.
+
+**Nothing is deployed yet.** Fly/Vercel CLIs and credentials are not on the
+dev machine; `RUNBOOK.md` §2b lists the exact round-1 deploy steps and
+`FRIENDS.md` is the friend-facing walkthrough (fill in its two URLs after
+deploying).
 
 ```bash
-cd /Users/sophie.arborbot/PROJECTS/github_repos/personhood
-gh pr list                # 7 open: feat/server -> feat/government-id-liveness -> feat/real-delivery
-                          # -> feat/web-pwa -> feat/deploy-config -> feat/runbook -> feat/status-update
-go test ./...             # all modules green in default + sendgrid + twilio builds
-cd app/web && npm run build  # 100 kB First Load JS
+bash scripts/test-all.sh      # every go.work module with -race (incl. tests/, tools/)
+bash scripts/e2e-email.sh     # real server: enroll by email → issue → verify
+cd app/web && npm run build   # 101 kB First Load JS
 ```
+
+OpenLine consumes this via `openline/src/suffrage/personhood-verifier`
+(sibling checkout, `replace` directives). Its vote/claim policies require an
+anchor verified within 24h, so round-1 credentials are rejected there with
+`anchor_missing` **by design**; for round 1 OpenLine must evaluate
+`docs/policies/round1-email.yaml` and pin the issuer key from
+`/.well-known/did.json`.
 
 ### What's implemented
 
@@ -91,22 +114,17 @@ Tackle in order. Each item is sized to be one PR. Copy any of the **bold prompts
 - [x] **7. Add `app-attest-device` + `ip-asn-reputation` + `captcha-turnstile` as a mandatory floor.** ✅ (`feat/floor-methods`)
   > Built all three supplementary methods (`app-attest-device` 18, `ip-asn-reputation` 10, `captcha-turnstile` 4 = 32 floor points, ~$0.001 total). All auto-register in the server: ip-asn always-on (default clean provider), captcha when `TURNSTILE_*` set, app-attest when `APP_ATTEST_SECRET` set. Shipped `docs/policies/default-floor.yaml` (anchor_required + min_supplementary_points: 32) as the recommended default integrators apply via the SDK. NOTE: enforcement is integrator-side (policy DSL), consistent with the architecture — the server registers/runs the floor methods rather than hard-gating issuance (which has no policy layer today).
 
-- [ ] **8. Upgrade existing `email` → `email-tier` and `sms` → `phone-carrier-tier`.**
-  > *Per `docs/06-methods-catalog.md`, replace the strength-8 plain email with the strength-22 tiered variant (domain rep + breach-presence via HaveIBeenPwned). Replace strength-12 plain SMS with strength-28 tiered variant (line tenure + porting history via Twilio Lookup or Telesign). Open one PR per method.*
-  > - ✅ **email-tier** built (`feat/email-tier`, PR open). Strength 22, `HIBPProvider` behind `HIBP_API_KEY`.
-  > - ✅ **phone-carrier-tier** built (`feat/phone-carrier-tier`, PR open). Strength 28, `TwilioLookupProvider` behind Twilio creds.
-  > - ⬜ Both registered additively (non-breaking); the web app's email/SMS screens still use plain `email`/`sms`. Swap them in a follow-up to fully close #8.
-  > - ✅ **email-tier** built (`feat/email-tier`, PR open for review). Strength 22, `HIBPProvider` behind `HIBP_API_KEY`, registered additively. Not yet swapped into the web app's email screen (kept non-breaking).
-  > - ⬜ **phone-carrier-tier** — next.
+- [x] **8. Upgrade existing `email` → `email-tier` and `sms` → `phone-carrier-tier`.** ✅ PR #23 + PR #24
+  > Both built additively (plain `email`/`sms` stay registered; the tiered variants register when their vendor env is present). **email-tier** (strength 22): domain reputation + HaveIBeenPwned breach-presence, `HIBPProvider` behind `HIBP_API_KEY`. **phone-carrier-tier** (strength 28): Twilio Lookup v2 line-type + optional SIM-swap, behind Twilio creds. Neither is wired into the web app's screens yet — that swap (retire plain `email`/`sms`) is the remaining sub-task.
 
-- [x] **9. Add `paid-billing-card` supplementary (strongest single supplementary).** ✅ (`feat/paid-billing-card`, PR open)
+- [x] **9. Add `paid-billing-card` supplementary (strongest single supplementary).** ✅ PR #25
   > *`src/methods/paid-billing-card/` wraps Stripe SetupIntent ($0 pre-auth + forced 3DS/SCA). Strength 35, supplementary, ~$0.30. Same shape as plaid-bank-link: Stripe client + in-memory store + genuine Stripe-Signature HMAC webhook (setup_intent.succeeded/setup_failed/canceled) + card-fingerprint dedup folded into the attestation digest. Auto-registers with its webhook route when STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET set. 14 tests with `-race`.*
 
 ### Sprint 3 — mobile: Capacitor wrap → Play Store internal test
 
 Once the PWA is live on a real domain (Sprint 1 outcome above), Sprint 3 ships it through the Play Store. The web app does the heavy lifting; Capacitor is just a native shell that loads it and adds the device APIs PWAs can't reach (FCM push, App Attest / Play Integrity).
 
-- [ ] **3a. Scaffold Capacitor under `app/mobile/`.**
+- [ ] **3a. Scaffold Capacitor under `app/mobile/`.** (PR #26 closed 2026-09-08: unverifiable until the PWA has a live URL; branch `feat/mobile-capacitor-scaffold` kept — reopen after Sprint 1 deploy.)
   > *Initialise a Capacitor 6 project that loads `https://<your-web>.vercel.app` (the live PWA). Configure for both Android and iOS. Wire `capacitor.config.ts` with `server.url` so OTA updates of the web app reach the wrapped app without a store roll. Open a PR.*
 
 - [ ] **3b. Wire Google Play Integrity + Apple App Attest as a second anchor.**
