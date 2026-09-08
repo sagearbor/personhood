@@ -1,6 +1,7 @@
 go 1.22.0
 
 use (
+	./pkg/redisclient
 	./pkg/types
 	./sdk/go
 	./src/credential

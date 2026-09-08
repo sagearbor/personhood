@@ -45,7 +45,7 @@ type Server struct {
 
 	registry *registry.Registry
 	issuer   *credential.Issuer
-	sessions *SessionStore
+	sessions SessionStore
 
 	// methodRoutes carries additional HTTP handlers a method plugin needs
 	// the server to host (e.g. third-party webhook receivers). Populated by
@@ -114,6 +114,11 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 
 	issuer := credential.NewIssuer(issuerDID, "key-1", cfg.IssuerPrivateKey, statusListURL)
 
+	sessions, err := NewSessionStoreFromEnv(cfg.SessionTTL)
+	if err != nil {
+		return nil, fmt.Errorf("server: session store: %w", err)
+	}
+
 	return &Server{
 		cfg:                cfg,
 		issuerDID:          issuerDID,
@@ -122,7 +127,7 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		statusListURL:      statusListURL,
 		registry:           deps.Registry,
 		issuer:             issuer,
-		sessions:           NewSessionStore(cfg.SessionTTL),
+		sessions:           sessions,
 		methodRoutes:       deps.MethodRoutes,
 		nowFunc:            func() time.Time { return time.Now().UTC() },
 		credentialLifetime: 365 * 24 * time.Hour,
@@ -180,18 +185,29 @@ func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
 	// Sender selection is delegated to the method packages' env-aware
 	// factories so build tags (`-tags sendgrid` / `-tags twilio`) and env
 	// vars together decide between LogSender and the real vendor sender.
+	// Store selection follows the same pattern: NewTokenStoreFromEnv /
+	// NewOTPStoreFromEnv return a Redis-backed store when REDIS_URL is set,
+	// an in-memory one (the default) otherwise.
+	emailStore, err := emailmethod.NewTokenStoreFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("email: token store: %w", err)
+	}
 	emailMethod := emailmethod.NewMethod(
 		emailmethod.NewSenderFromEnv(),
 		magicLinkBaseURL,
-		emailmethod.NewInMemoryStore(),
+		emailStore,
 	)
 	if err := reg.Register(emailMethod); err != nil {
 		return nil, fmt.Errorf("register email: %w", err)
 	}
 
+	smsStore, err := smsmethod.NewOTPStoreFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("sms: otp store: %w", err)
+	}
 	smsMethodPlugin := smsmethod.NewMethod(
 		smsmethod.NewSenderFromEnv(),
-		smsmethod.NewInMemoryStore(),
+		smsStore,
 	)
 	if err := reg.Register(smsMethodPlugin); err != nil {
 		return nil, fmt.Errorf("register sms: %w", err)
@@ -229,9 +245,13 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		if err != nil {
 			return Dependencies{}, fmt.Errorf("government-id-liveness: persona client: %w", err)
 		}
+		govStore, err := govidmethod.NewResultStoreFromEnv()
+		if err != nil {
+			return Dependencies{}, fmt.Errorf("government-id-liveness: result store: %w", err)
+		}
 		gov := govidmethod.NewMethod(govidmethod.Config{
 			PersonaClient: client,
-			Store:         govidmethod.NewInMemoryStore(),
+			Store:         govStore,
 			ReturnURL:     returnURL,
 		})
 		if err := reg.Register(gov); err != nil {

@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/sagearbor/personhood/pkg/redisclient"
 	"github.com/sagearbor/personhood/pkg/types"
 )
 
@@ -21,215 +24,49 @@ var ErrSessionNotFound = errors.New("server: session not found or expired")
 // reissue.
 var ErrSessionAlreadyIssued = errors.New("server: session already issued a credential")
 
-// Session is the per-enrollment state the server tracks between
-// /enrollment/start and /credentials/issue.
+// SessionStore is the interface the server uses to persist per-enrollment
+// state between /enrollment/start and /credentials/issue.
 //
-// All mutations MUST go through SessionStore's helper methods, which take
-// per-session locks; the fields are exported only so handlers can read them.
-type Session struct {
-	// ID is the opaque session identifier returned to the client. v0.1
-	// generates 32 bytes of randomness, base64url-encoded.
-	ID string
-
-	// HolderDID is the DID the credential will be bound to. When the client
-	// supplied a holder public key in /enrollment/start, this is a real
-	// did:key derived from it; otherwise it is a v0.1 placeholder generated
-	// server-side from the SessionID (see did.go).
-	HolderDID types.DID
-
-	// HolderPublicKey is the client-supplied Ed25519 public key backing
-	// HolderDID, or nil if the client did not supply one (e.g. the round-1
-	// email-only flow). Carried on the session so /v1/credentials/issue can
-	// derive a NullifierBinding for it (see did.go NullifierBindingForHolder).
-	HolderPublicKey ed25519.PublicKey
-
-	// CreatedAt and ExpiresAt define the session's lifetime.
-	CreatedAt time.Time
-	ExpiresAt time.Time
-
-	// VerifiedMethods accumulates one entry per successful method ceremony
-	// during this session. Order is insertion order.
-	VerifiedMethods []types.VerifiedMethod
-
-	// AnchorMethodID names the anchor method, if any, whose completion has
-	// been recorded. Set by RecordMethodResult when the completed method's
-	// metadata classifies it as MethodTypeAnchor.
-	AnchorMethodID *string
-
-	// IssuedCredentialID is non-empty once /credentials/issue has produced a
-	// credential for this session. Used to prevent double-issuance.
-	IssuedCredentialID string
-
-	mu sync.Mutex
-}
-
-// SessionStore is the in-process catalogue of active enrollment sessions.
+// InMemorySessionStore (this file) is the default, single-process backend.
+// RedisSessionStore (session_redis.go) is selected instead when REDIS_URL is
+// set (see NewSessionStoreFromEnv), so sessions survive process restarts and
+// are shared across horizontally scaled issuer replicas.
 //
-// Safe for concurrent use. Expired entries are evicted lazily on Get.
-type SessionStore struct {
-	ttl time.Duration
-
-	mu       sync.RWMutex
-	sessions map[string]*Session
-}
-
-// NewSessionStore constructs a SessionStore with the given session TTL.
-func NewSessionStore(ttl time.Duration) *SessionStore {
-	if ttl <= 0 {
-		ttl = time.Hour
-	}
-	return &SessionStore{
-		ttl:      ttl,
-		sessions: make(map[string]*Session),
-	}
-}
-
-// Create generates a fresh Session keyed by a 32-byte random ID. holderDID
-// is bound onto the session and propagated into every subsequent ceremony.
-func (s *SessionStore) Create(holderDID types.DID, now time.Time) (*Session, error) {
-	id, err := randomSessionID()
-	if err != nil {
-		return nil, err
-	}
-	sess := &Session{
-		ID:        id,
-		HolderDID: holderDID,
-		CreatedAt: now,
-		ExpiresAt: now.Add(s.ttl),
-	}
-	s.mu.Lock()
-	s.sessions[id] = sess
-	s.mu.Unlock()
-	return sess, nil
-}
-
-// Get returns the session with the given ID, or ErrSessionNotFound. Expired
-// sessions are deleted on read so the caller never observes them.
-func (s *SessionStore) Get(id string) (*Session, error) {
-	s.mu.RLock()
-	sess, ok := s.sessions[id]
-	s.mu.RUnlock()
-	if !ok {
-		return nil, ErrSessionNotFound
-	}
-	if time.Now().After(sess.ExpiresAt) {
-		s.mu.Lock()
-		delete(s.sessions, id)
-		s.mu.Unlock()
-		return nil, ErrSessionNotFound
-	}
-	return sess, nil
-}
-
-// RecordMethodResult appends a successful MethodResult to the session as a
-// frozen VerifiedMethod entry. metadata supplies the strength + freshness
-// fields the credential needs.
+// Every method returns SessionView, a plain, JSON-friendly value — never a
+// mutable pointer — so both backends can share one call-site contract in
+// handlers.go regardless of whether "the session" lives in a process-local
+// map or a remote store.
 //
-// If metadata.Type is MethodTypeAnchor, the session's AnchorMethodID is set
-// (or replaced) so the next issuance call can record it on the credential.
-// Returns an error if result.Success is false.
-func (s *SessionStore) RecordMethodResult(sessionID string, result types.MethodResult, metadata types.MethodMetadata) error {
-	if !result.Success {
-		return errors.New("server: cannot record a failed MethodResult")
-	}
-	sess, err := s.Get(sessionID)
-	if err != nil {
-		return err
-	}
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
+// Implementations MUST be safe for concurrent use.
+type SessionStore interface {
+	// Create makes a fresh session bound to holderPublicKey (nil if the
+	// client supplied none) and returns its view. now is the creation
+	// timestamp; the returned ExpiresAt is now plus the store's configured
+	// TTL.
+	Create(holderPublicKey ed25519.PublicKey, now time.Time) (SessionView, error)
 
-	if sess.IssuedCredentialID != "" {
-		return ErrSessionAlreadyIssued
-	}
+	// Get returns the current view of the session with the given ID, or
+	// ErrSessionNotFound if it does not exist or has expired.
+	Get(id string) (SessionView, error)
 
-	// Replace any previous entry for the same method ID rather than appending
-	// duplicates; a user who re-runs a ceremony should overwrite, not stack.
-	replaced := false
-	for i, vm := range sess.VerifiedMethods {
-		if vm.MethodID == result.MethodID {
-			sess.VerifiedMethods[i] = types.VerifiedMethod{
-				MethodID:          result.MethodID,
-				Strength:          metadata.Strength,
-				VerifiedAt:        result.VerifiedAt,
-				FreshnessLifetime: metadata.FreshnessLifetime,
-				AttestationDigest: result.AttestationDigest,
-			}
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		sess.VerifiedMethods = append(sess.VerifiedMethods, types.VerifiedMethod{
-			MethodID:          result.MethodID,
-			Strength:          metadata.Strength,
-			VerifiedAt:        result.VerifiedAt,
-			FreshnessLifetime: metadata.FreshnessLifetime,
-			AttestationDigest: result.AttestationDigest,
-		})
-	}
+	// RecordMethodResult appends a successful MethodResult to the session as
+	// a frozen VerifiedMethod entry. metadata supplies the strength +
+	// freshness fields the credential needs.
+	//
+	// If metadata.Type is MethodTypeAnchor, the session's AnchorMethodID is
+	// set (or replaced) so the next issuance call can record it on the
+	// credential. Returns an error if result.Success is false, or
+	// ErrSessionAlreadyIssued if the session already issued a credential.
+	RecordMethodResult(sessionID string, result types.MethodResult, metadata types.MethodMetadata) error
 
-	if metadata.Type == types.MethodTypeAnchor {
-		id := result.MethodID
-		sess.AnchorMethodID = &id
-	}
-	return nil
+	// MarkIssued stamps the session with the credential ID it produced,
+	// blocking future RecordMethodResult / issue calls. Returns
+	// ErrSessionAlreadyIssued if already marked.
+	MarkIssued(sessionID, credentialID string) error
 }
 
-// MarkIssued stamps the session with the credential ID it produced, blocking
-// future RecordMethodResult / issue calls.
-func (s *SessionStore) MarkIssued(sessionID, credentialID string) error {
-	sess, err := s.Get(sessionID)
-	if err != nil {
-		return err
-	}
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	if sess.IssuedCredentialID != "" {
-		return ErrSessionAlreadyIssued
-	}
-	sess.IssuedCredentialID = credentialID
-	return nil
-}
-
-// Snapshot returns a deep-copy view of the session safe to share with HTTP
-// handlers without leaking the internal lock.
-func (s *SessionStore) Snapshot(sessionID string) (SessionView, error) {
-	sess, err := s.Get(sessionID)
-	if err != nil {
-		return SessionView{}, err
-	}
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-
-	methodsCopy := make([]types.VerifiedMethod, len(sess.VerifiedMethods))
-	copy(methodsCopy, sess.VerifiedMethods)
-
-	var anchor *string
-	if sess.AnchorMethodID != nil {
-		v := *sess.AnchorMethodID
-		anchor = &v
-	}
-
-	var holderPub ed25519.PublicKey
-	if len(sess.HolderPublicKey) == ed25519.PublicKeySize {
-		holderPub = append(ed25519.PublicKey(nil), sess.HolderPublicKey...)
-	}
-
-	return SessionView{
-		ID:                 sess.ID,
-		HolderDID:          sess.HolderDID,
-		HolderPublicKey:    holderPub,
-		CreatedAt:          sess.CreatedAt,
-		ExpiresAt:          sess.ExpiresAt,
-		VerifiedMethods:    methodsCopy,
-		AnchorMethodID:     anchor,
-		IssuedCredentialID: sess.IssuedCredentialID,
-	}, nil
-}
-
-// SessionView is the lockless, JSON-friendly snapshot returned by Snapshot.
-// Mutating its fields has no effect on the underlying Session.
+// SessionView is the lockless, JSON-friendly snapshot every SessionStore
+// method returns. Mutating its fields has no effect on the underlying store.
 type SessionView struct {
 	ID        string    `json:"id"`
 	HolderDID types.DID `json:"holder_did"`
@@ -242,6 +79,211 @@ type SessionView struct {
 	VerifiedMethods    []types.VerifiedMethod `json:"verified_methods"`
 	AnchorMethodID     *string                `json:"anchor_method_id,omitempty"`
 	IssuedCredentialID string                 `json:"issued_credential_id,omitempty"`
+}
+
+// NewSessionStoreFromEnv returns a RedisSessionStore when REDIS_URL is set,
+// or an InMemorySessionStore (the default) otherwise. This mirrors the
+// env-aware factory pattern already used for delivery (email.NewSenderFromEnv,
+// sms.NewSenderFromEnv): the in-memory backend needs no configuration and
+// stays the default so existing single-process deployments (including
+// round-1) are unaffected; setting REDIS_URL is opt-in.
+func NewSessionStoreFromEnv(ttl time.Duration) (SessionStore, error) {
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		return NewInMemorySessionStore(ttl), nil
+	}
+	client, err := redisclient.ParseURL(redisURL)
+	if err != nil {
+		return nil, fmt.Errorf("server: REDIS_URL: %w", err)
+	}
+	return NewRedisSessionStore(client, ttl), nil
+}
+
+// ----------------------------------------------------------------------------
+// InMemorySessionStore
+// ----------------------------------------------------------------------------
+
+// session is the per-enrollment state InMemorySessionStore tracks in process
+// memory. All mutations MUST go through InMemorySessionStore's methods,
+// which take the per-session lock.
+type session struct {
+	id                 string
+	holderDID          types.DID
+	holderPublicKey    ed25519.PublicKey
+	createdAt          time.Time
+	expiresAt          time.Time
+	verifiedMethods    []types.VerifiedMethod
+	anchorMethodID     *string
+	issuedCredentialID string
+
+	mu sync.Mutex
+}
+
+func (sess *session) view() SessionView {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	methodsCopy := make([]types.VerifiedMethod, len(sess.verifiedMethods))
+	copy(methodsCopy, sess.verifiedMethods)
+
+	var anchor *string
+	if sess.anchorMethodID != nil {
+		v := *sess.anchorMethodID
+		anchor = &v
+	}
+
+	var holderPub ed25519.PublicKey
+	if len(sess.holderPublicKey) == ed25519.PublicKeySize {
+		holderPub = append(ed25519.PublicKey(nil), sess.holderPublicKey...)
+	}
+
+	return SessionView{
+		ID:                 sess.id,
+		HolderDID:          sess.holderDID,
+		HolderPublicKey:    holderPub,
+		CreatedAt:          sess.createdAt,
+		ExpiresAt:          sess.expiresAt,
+		VerifiedMethods:    methodsCopy,
+		AnchorMethodID:     anchor,
+		IssuedCredentialID: sess.issuedCredentialID,
+	}
+}
+
+// InMemorySessionStore is the in-process catalogue of active enrollment
+// sessions. Safe for concurrent use. Expired entries are evicted lazily on
+// Get. Scoped to one process — see NewSessionStoreFromEnv for the
+// Redis-backed alternative used when horizontally scaling.
+type InMemorySessionStore struct {
+	ttl time.Duration
+
+	mu       sync.RWMutex
+	sessions map[string]*session
+}
+
+// NewInMemorySessionStore constructs an InMemorySessionStore with the given
+// session TTL.
+func NewInMemorySessionStore(ttl time.Duration) *InMemorySessionStore {
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	return &InMemorySessionStore{
+		ttl:      ttl,
+		sessions: make(map[string]*session),
+	}
+}
+
+// Create implements SessionStore.
+func (s *InMemorySessionStore) Create(holderPublicKey ed25519.PublicKey, now time.Time) (SessionView, error) {
+	id, err := randomSessionID()
+	if err != nil {
+		return SessionView{}, err
+	}
+	holderDID := HolderDIDForSession(id, holderPublicKey)
+	var pubCopy ed25519.PublicKey
+	if len(holderPublicKey) == ed25519.PublicKeySize {
+		pubCopy = append(ed25519.PublicKey(nil), holderPublicKey...)
+	}
+	sess := &session{
+		id:              id,
+		holderDID:       holderDID,
+		holderPublicKey: pubCopy,
+		createdAt:       now,
+		expiresAt:       now.Add(s.ttl),
+	}
+	s.mu.Lock()
+	s.sessions[id] = sess
+	s.mu.Unlock()
+	return sess.view(), nil
+}
+
+// get returns the live *session for id, or ErrSessionNotFound.
+func (s *InMemorySessionStore) get(id string) (*session, error) {
+	s.mu.RLock()
+	sess, ok := s.sessions[id]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, ErrSessionNotFound
+	}
+	if time.Now().After(sess.expiresAt) {
+		s.mu.Lock()
+		delete(s.sessions, id)
+		s.mu.Unlock()
+		return nil, ErrSessionNotFound
+	}
+	return sess, nil
+}
+
+// Get implements SessionStore.
+func (s *InMemorySessionStore) Get(id string) (SessionView, error) {
+	sess, err := s.get(id)
+	if err != nil {
+		return SessionView{}, err
+	}
+	return sess.view(), nil
+}
+
+// RecordMethodResult implements SessionStore.
+func (s *InMemorySessionStore) RecordMethodResult(sessionID string, result types.MethodResult, metadata types.MethodMetadata) error {
+	if !result.Success {
+		return errors.New("server: cannot record a failed MethodResult")
+	}
+	sess, err := s.get(sessionID)
+	if err != nil {
+		return err
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	if sess.issuedCredentialID != "" {
+		return ErrSessionAlreadyIssued
+	}
+
+	// Replace any previous entry for the same method ID rather than appending
+	// duplicates; a user who re-runs a ceremony should overwrite, not stack.
+	replaced := false
+	for i, vm := range sess.verifiedMethods {
+		if vm.MethodID == result.MethodID {
+			sess.verifiedMethods[i] = types.VerifiedMethod{
+				MethodID:          result.MethodID,
+				Strength:          metadata.Strength,
+				VerifiedAt:        result.VerifiedAt,
+				FreshnessLifetime: metadata.FreshnessLifetime,
+				AttestationDigest: result.AttestationDigest,
+			}
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		sess.verifiedMethods = append(sess.verifiedMethods, types.VerifiedMethod{
+			MethodID:          result.MethodID,
+			Strength:          metadata.Strength,
+			VerifiedAt:        result.VerifiedAt,
+			FreshnessLifetime: metadata.FreshnessLifetime,
+			AttestationDigest: result.AttestationDigest,
+		})
+	}
+
+	if metadata.Type == types.MethodTypeAnchor {
+		id := result.MethodID
+		sess.anchorMethodID = &id
+	}
+	return nil
+}
+
+// MarkIssued implements SessionStore.
+func (s *InMemorySessionStore) MarkIssued(sessionID, credentialID string) error {
+	sess, err := s.get(sessionID)
+	if err != nil {
+		return err
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.issuedCredentialID != "" {
+		return ErrSessionAlreadyIssued
+	}
+	sess.issuedCredentialID = credentialID
+	return nil
 }
 
 // randomSessionID returns a 32-byte base64url (no padding) random string.
