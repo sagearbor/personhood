@@ -119,6 +119,14 @@ export function CredentialStep({
                   </span>
                 ))}
               </dd>
+              <dt>Nullifier binding</dt>
+              <dd>
+                {credential.credentialSubject.nullifierBinding ? (
+                  <span className="chip">bound</span>
+                ) : (
+                  <span className="warn">none (policies requiring nullifier_required will reject this)</span>
+                )}
+              </dd>
               <dt>Expires</dt>
               <dd>{new Date(credential.expirationDate).toLocaleDateString()}</dd>
             </dl>

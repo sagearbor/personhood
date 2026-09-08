@@ -1,0 +1,24 @@
+# Example policy demonstrating nullifier_required (DSL v1.0).
+#
+# Same acceptance bar as round1-email.yaml (email inbox control only, no
+# anchor) but also demands a per-context nullifier, so an integrator can
+# enforce one-credential-one-action even at this weak tier. The server only
+# populates credentialSubject.nullifierBinding when the client supplied a
+# holder public key in POST /enrollment/start (a real did:key holder DID);
+# credentials issued without one are rejected here with nullifier_missing.
+#
+# See tests/e2e_nullifier_test.go for both branches proven against a real
+# server + tools/verify-credential, and docs/03-credential-format.md /
+# docs/04-policy-dsl.md for the full nullifierBinding design.
+version: "1.0"
+policy_id: "personhood/round1-email-nullifier-example/v1"
+action: "Round-1 plumbing check with a per-context nullifier (example)"
+
+anchor_required: false
+min_supplementary_points: 8
+allowed_methods: ["email", "ip-asn-reputation"]
+
+max_credential_age_seconds: 7776000   # 90 days
+
+nullifier_required: true
+nullifier_context_tag: "personhood/docs-example/action-1"

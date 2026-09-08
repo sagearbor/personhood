@@ -20,6 +20,7 @@ import (
 	"github.com/sagearbor/personhood/src/credential"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	smsmethod "github.com/sagearbor/personhood/src/methods/sms"
+	"github.com/sagearbor/personhood/src/policy"
 	"github.com/sagearbor/personhood/src/registry"
 )
 
@@ -275,6 +276,91 @@ func TestIntegration_FullEnrollmentToIssuance(t *testing.T) {
 		t.Errorf("second issuance want 409, got %d", resp2.StatusCode)
 	}
 	resp2.Body.Close()
+}
+
+// TestIntegration_HolderKeyBindsRealDIDAndNullifier is the fast (in-process
+// httptest) counterpart to tests/e2e_nullifier_test.go's real-binary e2e
+// test: a client that supplies an Ed25519 holder public key at
+// /enrollment/start gets a real did:key holder DID and a credential whose
+// nullifierBinding satisfies a nullifier_required policy; a client that
+// supplies none gets the v0.1 placeholder DID and a credential that fails
+// the same policy with nullifier_missing.
+func TestIntegration_HolderKeyBindsRealDIDAndNullifier(t *testing.T) {
+	base, _, emailSender, _, cleanup := newTestServer(t)
+	defer cleanup()
+
+	nullifierPolicy := types.Policy{
+		Version:                "1.0",
+		PolicyID:               "test/nullifier-required/v1",
+		Action:                 "test",
+		AnchorRequired:         false,
+		MinSupplementaryPoints: 0,
+		NullifierRequired:      true,
+		NullifierContextTag:    "test/context-1",
+	}
+
+	issueByEmail := func(t *testing.T, startBody []byte) (startEnrollmentResponse, types.PersonhoodCredential) {
+		t.Helper()
+		var start startEnrollmentResponse
+		mustPOST(t, base+"/enrollment/start", startBody, &start)
+
+		beginBody := mustJSON(t, map[string]any{
+			"session_id": start.SessionID,
+			"user_input": "nullifier-test@example.com",
+		})
+		var beginResp beginMethodResponse
+		mustPOST(t, base+"/v1/methods/email/begin", beginBody, &beginResp)
+
+		_, link, _ := emailSender.lastSent()
+		resp, err := http.Get(link)
+		if err != nil {
+			t.Fatalf("click magic link: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("magic-link click returned %d", resp.StatusCode)
+		}
+
+		issueBody := mustJSON(t, map[string]any{"session_id": start.SessionID})
+		var issued issueCredentialResponse
+		mustPOST(t, base+"/v1/credentials/issue", issueBody, &issued)
+		return start, issued.Credential
+	}
+
+	// --- bound: client supplies a holder Ed25519 public key. ---
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundStart, boundCred := issueByEmail(t, mustJSON(t, map[string]any{
+		"holder_public_key_b64": base64.StdEncoding.EncodeToString(pub),
+	}))
+	if !strings.HasPrefix(string(boundStart.HolderDID), "did:key:z") {
+		t.Fatalf("expected a did:key holder DID, got %q", boundStart.HolderDID)
+	}
+	if boundCred.CredentialSubject.NullifierBinding == nil {
+		t.Fatal("bound credential has no nullifierBinding")
+	}
+	boundResult := policy.Evaluate(boundCred, nullifierPolicy, time.Now())
+	if !boundResult.OK || boundResult.Code != types.EvalOK {
+		t.Fatalf("nullifier-required policy should accept the bound credential: %+v", boundResult)
+	}
+	if boundResult.DerivedNullifier == nil || *boundResult.DerivedNullifier == "" {
+		t.Fatalf("expected a derived nullifier for the bound credential, got %+v", boundResult)
+	}
+
+	// --- unbound: client supplies no holder key. ---
+	unboundStart, unboundCred := issueByEmail(t, mustJSON(t, map[string]any{}))
+	if !strings.HasPrefix(string(unboundStart.HolderDID), "did:personhood:holder:") {
+		t.Fatalf("expected the v0.1 placeholder holder DID, got %q", unboundStart.HolderDID)
+	}
+	if unboundCred.CredentialSubject.NullifierBinding != nil {
+		t.Fatalf("unbound credential should have no nullifierBinding, got %+v", unboundCred.CredentialSubject.NullifierBinding)
+	}
+	unboundResult := policy.Evaluate(unboundCred, nullifierPolicy, time.Now())
+	if unboundResult.OK || unboundResult.Code != types.EvalNullifierMissing {
+		t.Fatalf("nullifier-required policy should reject the unbound credential with nullifier_missing: %+v", unboundResult)
+	}
 }
 
 func TestIntegration_SessionNotFound(t *testing.T) {

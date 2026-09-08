@@ -45,23 +45,114 @@ func IssuerVerificationMethod(issuerDID types.DID, keyFragment string) string {
 	return fmt.Sprintf("%s#%s", issuerDID, keyFragment)
 }
 
-// HolderDIDForSession returns a placeholder did:personhood holder DID derived
-// from the session ID. The v0.1 reference server does NOT manage per-holder
-// key pairs; the credential is bound to this opaque identifier so it can be
-// uniquely addressed, but presentation flows are out of scope until v0.2.
+// ed25519MulticodecPrefix is the two-byte unsigned-varint encoding of the
+// multicodec code 0xed ("ed25519-pub"), per the did:key spec
+// (https://w3c-ccg.github.io/did-method-key/#ed25519-x25519). This is the
+// prefix that goes in front of the raw 32-byte Ed25519 public key before
+// base58btc-encoding.
+var ed25519MulticodecPrefix = []byte{0xed, 0x01}
+
+// DIDKeyFromEd25519 encodes an Ed25519 public key as a did:key identifier:
+// "did:key:z" + base58btc(multicodec-prefix || raw public key).
 //
-// If `holderPublicKey` is non-nil (32 bytes), its SHA-256 is mixed in so two
-// sessions using the same client-side key derive the same DID. This is the
-// hook the web app will use once it generates a WebCrypto Ed25519 keypair.
+// did:key is self-certifying — the DID itself is a full encoding of the
+// public key, so no registry or resolver fetch is needed to recover it (see
+// Ed25519FromDIDKey). This is the real holder identifier the v0.2 web app
+// produces once it generates its own Ed25519 keypair; v0.1's placeholder
+// did:personhood:holder:<sha256> (still used when no client key is supplied,
+// e.g. the round-1 email-only flow) remains available as a fallback.
+func DIDKeyFromEd25519(pub ed25519.PublicKey) (types.DID, error) {
+	if len(pub) != ed25519.PublicKeySize {
+		return "", fmt.Errorf("DIDKeyFromEd25519: public key must be %d bytes, got %d", ed25519.PublicKeySize, len(pub))
+	}
+	data := make([]byte, 0, len(ed25519MulticodecPrefix)+len(pub))
+	data = append(data, ed25519MulticodecPrefix...)
+	data = append(data, pub...)
+	return types.DID(fmt.Sprintf("did:key:z%s", base58Encode(data))), nil
+}
+
+// Ed25519FromDIDKey decodes a did:key identifier produced by
+// DIDKeyFromEd25519 back into the raw Ed25519 public key. It rejects any DID
+// that is not a "did:key:z..." Ed25519 identifier.
+func Ed25519FromDIDKey(did types.DID) (ed25519.PublicKey, error) {
+	const prefix = "did:key:z"
+	s := string(did)
+	if !strings.HasPrefix(s, prefix) {
+		return nil, fmt.Errorf("Ed25519FromDIDKey: %q is not a did:key:z... identifier", did)
+	}
+	data, err := base58Decode(strings.TrimPrefix(s, prefix))
+	if err != nil {
+		return nil, fmt.Errorf("Ed25519FromDIDKey: %w", err)
+	}
+	if len(data) != len(ed25519MulticodecPrefix)+ed25519.PublicKeySize {
+		return nil, fmt.Errorf("Ed25519FromDIDKey: decoded length %d does not match ed25519-pub multicodec + key", len(data))
+	}
+	if data[0] != ed25519MulticodecPrefix[0] || data[1] != ed25519MulticodecPrefix[1] {
+		return nil, fmt.Errorf("Ed25519FromDIDKey: unexpected multicodec prefix %x, want %x", data[:2], ed25519MulticodecPrefix)
+	}
+	return ed25519.PublicKey(data[2:]), nil
+}
+
+// HolderDIDForSession returns the holder DID the issued credential will be
+// bound to.
+//
+// If `holderPublicKey` is a valid 32-byte Ed25519 public key (the web app
+// generates one and sends it in POST /enrollment/start), the holder DID is a
+// real, self-certifying did:key derived from it via DIDKeyFromEd25519 — the
+// same key always maps to the same DID, independent of the session.
+//
+// Otherwise this falls back to the v0.1 placeholder
+// did:personhood:holder:<sha256(sessionID)>, used when a client does not (or
+// cannot yet) supply a holder key — e.g. the round-1 email-only flow.
+// Credentials issued against a placeholder DID carry no NullifierBinding
+// (see NullifierBindingForHolder), so policies with nullifier_required fail
+// closed rather than silently accepting an unbound credential.
 func HolderDIDForSession(sessionID string, holderPublicKey ed25519.PublicKey) types.DID {
+	if len(holderPublicKey) == ed25519.PublicKeySize {
+		did, err := DIDKeyFromEd25519(holderPublicKey)
+		if err == nil {
+			return did
+		}
+		// Unreachable given the length check above, but fall through to the
+		// placeholder rather than panicking on a malformed key.
+	}
 	h := sha256.New()
 	h.Write([]byte(sessionID))
-	if len(holderPublicKey) == ed25519.PublicKeySize {
-		h.Write([]byte{0})
-		h.Write(holderPublicKey)
-	}
 	digest := h.Sum(nil)
 	return types.DID(fmt.Sprintf("did:personhood:holder:%s", hex.EncodeToString(digest)))
+}
+
+// NullifierBindingForHolder derives a v0.1 stub NullifierBinding from a
+// holder's Ed25519 public key, or nil if no valid key was supplied.
+//
+// docs/03-credential-format.md specifies the production scheme as a Pedersen
+// commitment over BN254 to a holder-held secret scalar, verified in
+// zero-knowledge (OpenLine's Circom/Poseidon stack). Generating and handing
+// back such a secret is out of scope here; consistent with the existing
+// src/policy/nullifier.go "SHA-256 stub for v0.1" (see its doc comment), this
+// produces a deterministic, non-malleable stand-in commitment:
+//
+//	commitment = SHA-256("personhood-nullifier-binding-v1" || holderPubKey)
+//
+// Because the commitment is a pure function of the holder's public key, the
+// same holder consistently derives the same commitment (and therefore the
+// same per-context nullifier via policy.DeriveNullifier) across separate
+// credential issuances — the anti-double-claim property NullifierBinding
+// exists for. Curve/Scheme are set to the values the eventual real Pedersen
+// implementation will use ("bn254"/"pedersen-v1") so integrators do not need
+// to change their field-matching logic when v0.2 lands.
+func NullifierBindingForHolder(holderPublicKey ed25519.PublicKey) *types.NullifierBinding {
+	if len(holderPublicKey) != ed25519.PublicKeySize {
+		return nil
+	}
+	h := sha256.New()
+	h.Write([]byte("personhood-nullifier-binding-v1"))
+	h.Write(holderPublicKey)
+	return &types.NullifierBinding{
+		Commitment: hex.EncodeToString(h.Sum(nil)),
+		Curve:      "bn254",
+		Scheme:     "pedersen-v1",
+	}
 }
 
 // IssuerDIDDocument is the minimal subset of a W3C DID document the issuer
