@@ -17,30 +17,23 @@ FROM golang:${GO_VERSION}-bookworm AS builder
 
 WORKDIR /src
 
-# Copy the workspace + all module files first so the cache stays warm when
-# only application code changes. The .dockerignore at the repo root keeps
-# host artifacts (node_modules, .next, etc.) out of the build context.
+# Copy the workspace and every module. go.work lists each module directory,
+# and `go mod download` refuses to run when any listed directory lacks its
+# go.mod — so we copy the full source tree (small: a few hundred KB) rather
+# than hand-listing go.mod files that go stale every time a method is added.
+# The .dockerignore keeps host artifacts (node_modules, .next, docs, app/)
+# out of the build context. Module downloads and the build cache are kept in
+# BuildKit cache mounts, so rebuilds stay fast even without a separate
+# go.mod-only layer.
 COPY go.work go.work.sum* ./
-COPY pkg/types/go.mod                              pkg/types/go.mod
-COPY src/registry/go.mod                           src/registry/go.mod
-COPY src/credential/go.mod   src/credential/go.sum src/credential/
-COPY src/policy/go.mod                             src/policy/go.mod
-COPY src/methods/email/go.mod                      src/methods/email/go.mod
-COPY src/methods/sms/go.mod                        src/methods/sms/go.mod
-COPY src/methods/phone-liveness/go.mod             src/methods/phone-liveness/go.mod
-COPY src/methods/government-id-liveness/go.mod     src/methods/government-id-liveness/go.mod
-COPY src/server/go.mod       src/server/go.sum     src/server/
-COPY sdk/go/go.mod                                 sdk/go/go.mod
-
-# Use a sentinel target so module downloads are cached as their own layer.
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
-    cd src/server && go mod download
-
-# Copy the actual sources now.
 COPY pkg     pkg
 COPY src     src
 COPY sdk     sdk
+COPY tools   tools
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    cd src/server && go mod download
 
 # Compile with sendgrid + twilio so real senders are linked. CGO disabled so
 # we get a fully static binary that distroless can run.
