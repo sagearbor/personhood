@@ -54,6 +54,17 @@ type Config struct {
 	// SessionTTL is how long a single enrollment session is valid before its
 	// state is garbage-collected.
 	SessionTTL time.Duration
+
+	// ExposeChallengeSecrets, when true, lets /v1/methods/{id}/begin return
+	// secret-bearing challenge fields to the client — today that is the email
+	// method's magic_link_url. It exists ONLY for local development and
+	// automated tests (so a script can "click" the link without an inbox).
+	//
+	// It MUST be false in any deployment real users touch: with it on, a
+	// client can complete the email ceremony for any address it never
+	// controlled, which makes the method worthless as a signal. Env:
+	// DEV_EXPOSE_CHALLENGE_SECRETS=1.
+	ExposeChallengeSecrets bool
 }
 
 // LoadConfigFromEnv reads the canonical environment variables documented in
@@ -65,16 +76,18 @@ type Config struct {
 //     key; both forms are accepted)
 //
 // Optional with defaults:
-//   - SERVER_ADDR           default ":8080"
-//   - SERVER_PUBLIC_URL     default "http://localhost:8080"
-//   - CORS_ALLOWED_ORIGINS  default "http://localhost:3000"
-//   - SESSION_TTL_MINUTES   default 60
+//   - SERVER_ADDR                  default ":8080"
+//   - SERVER_PUBLIC_URL            default "http://localhost:8080"
+//   - CORS_ALLOWED_ORIGINS         default "http://localhost:3000"
+//   - SESSION_TTL_MINUTES          default 60
+//   - DEV_EXPOSE_CHALLENGE_SECRETS default off (dev/test only — see Config)
 func LoadConfigFromEnv() (Config, error) {
 	cfg := Config{
-		Addr:               firstNonEmpty(os.Getenv("SERVER_ADDR"), ":8080"),
-		PublicURL:          firstNonEmpty(os.Getenv("SERVER_PUBLIC_URL"), "http://localhost:8080"),
-		CORSAllowedOrigins: splitCSV(firstNonEmpty(os.Getenv("CORS_ALLOWED_ORIGINS"), "http://localhost:3000")),
-		SessionTTL:         60 * time.Minute,
+		Addr:                   firstNonEmpty(os.Getenv("SERVER_ADDR"), ":8080"),
+		PublicURL:              firstNonEmpty(os.Getenv("SERVER_PUBLIC_URL"), "http://localhost:8080"),
+		CORSAllowedOrigins:     splitCSV(firstNonEmpty(os.Getenv("CORS_ALLOWED_ORIGINS"), "http://localhost:3000")),
+		SessionTTL:             60 * time.Minute,
+		ExposeChallengeSecrets: envBool(os.Getenv("DEV_EXPOSE_CHALLENGE_SECRETS")),
 	}
 
 	if m := os.Getenv("SESSION_TTL_MINUTES"); m != "" {
@@ -161,6 +174,15 @@ func decodeB64Tolerant(s string) ([]byte, error) {
 		}
 	}
 	return nil, errors.New("not valid base64 (tried url/std, padded/unpadded)")
+}
+
+// envBool interprets the usual truthy spellings of a boolean env var.
+func envBool(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func firstNonEmpty(xs ...string) string {

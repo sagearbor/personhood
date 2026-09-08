@@ -16,4 +16,6 @@ use (
 	./src/policy
 	./src/registry
 	./src/server
+	./tests
+	./tools/verify-credential
 )

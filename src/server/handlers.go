@@ -31,23 +31,23 @@ type startEnrollmentRequest struct {
 
 // startEnrollmentResponse is returned by POST /enrollment/start.
 type startEnrollmentResponse struct {
-	SessionID        string                 `json:"session_id"`
-	HolderDID        types.DID              `json:"holder_did"`
-	IssuerDID        types.DID              `json:"issuer_did"`
-	ExpiresAt        time.Time              `json:"expires_at"`
-	AvailableMethods []methodSummary        `json:"available_methods"`
+	SessionID        string          `json:"session_id"`
+	HolderDID        types.DID       `json:"holder_did"`
+	IssuerDID        types.DID       `json:"issuer_did"`
+	ExpiresAt        time.Time       `json:"expires_at"`
+	AvailableMethods []methodSummary `json:"available_methods"`
 }
 
 // methodSummary is the projection of MethodMetadata returned to clients on
 // the enrollment-start and list-methods endpoints. Same shape as the
 // underlying type — kept as a named alias so the wire contract is explicit.
 type methodSummary struct {
-	ID                string `json:"id"`
-	Type              string `json:"type"`
-	Strength          int    `json:"strength"`
-	UXFriction        string `json:"ux_friction"`
-	CostUSD           float64 `json:"cost_usd"`
-	Version           string `json:"version"`
+	ID         string  `json:"id"`
+	Type       string  `json:"type"`
+	Strength   int     `json:"strength"`
+	UXFriction string  `json:"ux_friction"`
+	CostUSD    float64 `json:"cost_usd"`
+	Version    string  `json:"version"`
 }
 
 // beginMethodRequest is the JSON body of POST /v1/methods/{methodId}/begin.
@@ -71,8 +71,8 @@ type completeMethodRequest struct {
 }
 
 type completeMethodResponse struct {
-	Result        types.MethodResult `json:"result"`
-	Session       SessionView        `json:"session"`
+	Result  types.MethodResult `json:"result"`
+	Session SessionView        `json:"session"`
 }
 
 // issueCredentialRequest is the JSON body of POST /v1/credentials/issue.
@@ -162,11 +162,11 @@ func (s *Server) handleBeginMethod(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cc := types.CeremonyContext{
-		SessionID:  sess.ID,
-		UserID:     req.UserInput, // v0.1 hand-off — see email.go / sms.go
-		MethodID:   methodID,
-		IssuerDID:  s.issuerDID,
-		StartedAt:  s.nowFunc(),
+		SessionID: sess.ID,
+		UserID:    req.UserInput, // v0.1 hand-off — see email.go / sms.go
+		MethodID:  methodID,
+		IssuerDID: s.issuerDID,
+		StartedAt: s.nowFunc(),
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -176,7 +176,48 @@ func (s *Server) handleBeginMethod(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "begin_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, beginMethodResponse{Challenge: challenge})
+	writeJSON(w, http.StatusOK, beginMethodResponse{Challenge: s.redactChallenge(challenge)})
+}
+
+// challengeSecretKeys lists ChallengeData payload keys that must never reach
+// the client in a real deployment. A method may include them for the benefit
+// of its Sender / logs, but handing them to the browser would let the client
+// complete the ceremony without the out-of-band step the method exists to
+// prove (e.g. the email magic link proves inbox control only if the link is
+// delivered to the inbox — not to whoever called /begin).
+var challengeSecretKeys = []string{"magic_link_url"}
+
+// redactChallenge returns a copy of ch with challengeSecretKeys removed from
+// the payload, unless Config.ExposeChallengeSecrets is set (dev/test only).
+func (s *Server) redactChallenge(ch types.ChallengeData) types.ChallengeData {
+	if s.cfg.ExposeChallengeSecrets || len(ch.Payload) == 0 {
+		return ch
+	}
+	out := types.ChallengeData{Type: ch.Type, Payload: make(map[string]any, len(ch.Payload))}
+	for k, v := range ch.Payload {
+		out.Payload[k] = v
+	}
+	for _, k := range challengeSecretKeys {
+		delete(out.Payload, k)
+	}
+	return out
+}
+
+// handleGetSession is GET /v1/sessions/{sessionId}. It returns the same
+// SessionView that /complete returns, so a client can poll for progress made
+// out of band — most importantly whether the email magic link has been
+// clicked (in another tab, or on another device) — instead of guessing.
+//
+// The session ID is a 32-byte random bearer token, exactly as it is for
+// /credentials/issue, so knowing it is the authorization.
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionId")
+	view, err := s.sessions.Snapshot(sessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
@@ -200,10 +241,10 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cc := types.CeremonyContext{
-		SessionID:  sess.ID,
-		MethodID:   methodID,
-		IssuerDID:  s.issuerDID,
-		StartedAt:  sess.CreatedAt,
+		SessionID: sess.ID,
+		MethodID:  methodID,
+		IssuerDID: s.issuerDID,
+		StartedAt: sess.CreatedAt,
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
