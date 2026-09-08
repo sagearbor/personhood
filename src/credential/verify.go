@@ -115,27 +115,30 @@ var (
 )
 
 // decodeProofValue decodes a v0.1 base64url-encoded proofValue. For forward
-// compatibility we also accept a multibase-base58-btc value (prefix "z"),
-// though Issue currently never emits one. v0.2 will flip the default to
-// multibase.
+// compatibility we also recognise a multibase-base58-btc value (prefix "z")
+// and reject it with a clear message, though Issue currently never emits one.
+//
+// Order matters: a base64url-encoded Ed25519 signature legitimately begins
+// with 'z' about 1 time in 64, so base64url must be tried FIRST and the
+// multibase check only applied to strings that are not a valid 64-byte
+// base64url signature. (An earlier version checked the prefix first and
+// randomly rejected ~1.5% of genuine credentials.)
 func decodeProofValue(s string) ([]byte, error) {
 	if s == "" {
 		return nil, errors.New("empty proofValue")
+	}
+	// Unpadded base64url (what Issue emits), then padded for tolerance.
+	for _, enc := range []*base64.Encoding{base64.RawURLEncoding, base64.URLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil && len(b) == ed25519.SignatureSize {
+			return b, nil
+		}
 	}
 	if strings.HasPrefix(s, "z") {
 		// Reserved for v0.2 multibase-base58-btc. We deliberately do NOT
 		// pull in a base58 dependency in v0.1; reject with a clear message.
 		return nil, errors.New("multibase-base58-btc proofValues not yet supported (v0.2)")
 	}
-	// Try unpadded base64url (what Issue emits).
-	if b, err := base64.RawURLEncoding.DecodeString(s); err == nil {
-		return b, nil
-	}
-	// Fall back to padded base64url, for tolerance.
-	if b, err := base64.URLEncoding.DecodeString(s); err == nil {
-		return b, nil
-	}
-	return nil, errors.New("proofValue is not valid base64url")
+	return nil, fmt.Errorf("proofValue is not a base64url-encoded %d-byte Ed25519 signature", ed25519.SignatureSize)
 }
 
 // ---------------------------------------------------------------------------
