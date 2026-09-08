@@ -8,6 +8,7 @@ import { SmsStep } from '@/components/steps/SmsStep';
 import { IdStep } from '@/components/steps/IdStep';
 import { CredentialStep } from '@/components/steps/CredentialStep';
 import { startEnrollment, type StartEnrollmentResponse, type Credential, SERVER_URL } from '@/lib/api';
+import { selectEmailMethod, selectSmsMethod } from '@/lib/tiering';
 
 export default function Page() {
   const [session, setSession] = useState<StartEnrollmentResponse | null>(null);
@@ -36,7 +37,13 @@ export default function Page() {
   }, []);
 
   const idAvailable = !!session?.available_methods.some((m) => m.id === 'government-id-liveness');
-  const smsAvailable = !!session?.available_methods.some((m) => m.id === 'sms');
+  // Prefer the tiered variants (email-tier / phone-carrier-tier) whenever the
+  // server advertises them; fall back to plain email/sms otherwise. See
+  // lib/tiering.ts — this is the "retire the plain email/sms paths" swap
+  // from STATUS.md checklist #8: the UI no longer assumes a fixed method id.
+  const emailMethod = session ? selectEmailMethod(session.available_methods) : null;
+  const smsMethod = session ? selectSmsMethod(session.available_methods) : null;
+  const smsAvailable = !!smsMethod;
 
   function markCompleted(id: StepId) {
     setCompleted((s) => new Set(s).add(id));
@@ -63,22 +70,24 @@ export default function Page() {
         <>
           <Progress current={step} completed={completed} skip={skipped} />
           <div className="stage">
-            {step === 'email' && (
+            {step === 'email' && emailMethod && (
               <EmailStep
                 session={session}
+                method={emailMethod}
                 done={completed.has('email')}
                 onSent={() => {/* sent; the step polls the server until the link is clicked */}}
                 onVerified={() => markCompleted('email')}
                 onContinue={() => {
                   markCompleted('email');
-                  // Round-1 deployments may not register SMS at all.
+                  // Round-1 deployments may not register SMS/phone-carrier-tier at all.
                   setStep(smsAvailable ? 'sms' : 'id');
                 }}
               />
             )}
-            {step === 'sms' && (
+            {step === 'sms' && smsMethod && (
               <SmsStep
                 session={session}
+                method={smsMethod}
                 done={completed.has('sms')}
                 onVerified={() => markCompleted('sms')}
                 onContinue={() => {

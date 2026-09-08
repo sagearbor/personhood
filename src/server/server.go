@@ -353,9 +353,12 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 	// additively alongside `sms` when Twilio credentials are present, so the
 	// strength-28 rating is only advertised when the real carrier provider is
 	// wired. It reuses the env-aware sms sender (Twilio behind `-tags twilio`,
-	// LogSender otherwise) via a thin interface adapter. The intended end-state
-	// is to retire plain `sms` in favor of this once the web app threads the
-	// carrier fields; until then both coexist.
+	// LogSender otherwise) via a thin interface adapter. app/web now prefers
+	// this method over plain `sms` whenever the server advertises it (see
+	// app/web/lib/tiering.ts); both methods use the same "otp" ceremony shape
+	// over the already-parameterized /v1/methods/{id}/begin|complete routes,
+	// so no server-side routing change is needed (contrast with email-tier's
+	// shared magic-link landing route above).
 	if os.Getenv("TWILIO_ACCOUNT_SID") != "" && os.Getenv("TWILIO_AUTH_TOKEN") != "" {
 		carrierTier := carriertiermethod.NewMethod(carriertiermethod.Config{
 			Sender:   smsTierSenderAdapter{inner: smsmethod.NewSenderFromEnv()},
@@ -373,12 +376,27 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 	// strength-22 rating is only advertised when the real enrichment provider
 	// is wired. It reuses the env-aware email sender (SendGrid behind
 	// `-tags sendgrid`, LogSender otherwise) via a thin interface adapter.
-	// The intended end-state is to retire plain `email` in favor of this once
-	// the web app threads the enrichment fields; until then both coexist.
+	// app/web now prefers this method over plain `email` whenever the server
+	// advertises it (see app/web/lib/tiering.ts); both stay registered so a
+	// server without HIBP_API_KEY still issues on plain `email`.
+	//
+	// Magic links for BOTH methods land on the same GET
+	// /v1/methods/email/verify route (handleEmailMagicLink), so email-tier's
+	// base URL carries an explicit `method=email-tier` query parameter —
+	// otherwise the shared handler would default to completing the ceremony
+	// against the plain `email` method, and email-tier's token (stored in its
+	// own in-memory store) would never be found.
 	if os.Getenv("HIBP_API_KEY") != "" {
+		emailTierBaseURL := magicLinkBaseURL
+		if u, err := url.Parse(magicLinkBaseURL); err == nil {
+			q := u.Query()
+			q.Set("method", emailtiermethod.MethodID)
+			u.RawQuery = q.Encode()
+			emailTierBaseURL = u.String()
+		}
 		emailTier := emailtiermethod.NewMethod(emailtiermethod.Config{
 			Sender:   emailTierSenderAdapter{inner: emailmethod.NewSenderFromEnv()},
-			BaseURL:  magicLinkBaseURL,
+			BaseURL:  emailTierBaseURL,
 			Store:    emailtiermethod.NewInMemoryStore(),
 			Provider: emailtiermethod.NewProviderFromEnv(),
 		})

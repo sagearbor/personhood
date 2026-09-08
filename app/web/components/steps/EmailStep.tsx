@@ -5,24 +5,28 @@ import { Button } from '../Button';
 import { Card } from '../Card';
 import { Field } from '../Field';
 import type { Status } from '../StatusPill';
-import { beginMethod, getSession, hasVerified, type StartEnrollmentResponse } from '@/lib/api';
+import { beginMethod, getSession, hasVerified, type MethodSummary, type StartEnrollmentResponse } from '@/lib/api';
 
 // How often to ask the server whether the magic link has been clicked.
 const POLL_MS = 2500;
 
 export function EmailStep({
   session,
+  method,
   done,
   onSent,
   onVerified,
   onContinue,
 }: {
   session: StartEnrollmentResponse;
+  /** The method to drive — 'email-tier' when the server advertises it, else plain 'email'. See lib/tiering.ts. */
+  method: MethodSummary;
   done: boolean;
   onSent: (email: string) => void;
   onVerified: () => void;
   onContinue: () => void;
 }) {
+  const methodID = method.id;
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [verified, setVerified] = useState(done);
@@ -41,7 +45,7 @@ export function EmailStep({
       try {
         const view = await getSession(session.session_id);
         if (cancelled) return;
-        if (hasVerified(view, 'email')) {
+        if (hasVerified(view, methodID)) {
           setVerified(true);
           setStatus('ok');
           setStatusText('verified');
@@ -61,14 +65,14 @@ export function EmailStep({
       if (pollTimer.current) window.clearTimeout(pollTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sent, verified, session.session_id]);
+  }, [sent, verified, session.session_id, methodID]);
 
   async function send(action: 'send' | 'resend') {
     setErr(null);
     setStatus('pending');
     setStatusText(action === 'resend' ? 'resending' : 'sending');
     try {
-      await beginMethod('email', session.session_id, email.trim());
+      await beginMethod(methodID, session.session_id, email.trim());
       setSent(true);
       setStatus('pending');
       setStatusText('waiting for click');
@@ -83,7 +87,7 @@ export function EmailStep({
   async function checkNow() {
     try {
       const view = await getSession(session.session_id);
-      if (hasVerified(view, 'email')) {
+      if (hasVerified(view, methodID)) {
         setVerified(true);
         setStatus('ok');
         setStatusText('verified');
@@ -108,7 +112,7 @@ export function EmailStep({
       statusLabel={statusText}
       footer={
         <span>
-          Method ID <code>email</code> · strength 8 · supplementary
+          Method ID <code>{method.id}</code> · strength {method.strength} · supplementary
         </span>
       }
     >
