@@ -31,11 +31,8 @@ git clone git@github.com:sagearbor/personhood.git
 cd personhood
 
 # 2. local sanity check
-for m in pkg/types src/registry src/credential src/policy \
-         src/methods/email src/methods/sms \
-         src/methods/government-id-liveness src/server; do
-  (cd "$m" && go test -race ./...) || exit 1
-done
+bash scripts/test-all.sh                 # every go.work module, with -race
+bash scripts/e2e-email.sh                # real server on loopback: enroll → issue → verify
 (cd app/web && npm install && npm run build)
 
 # 3. one-time vendor signups (see §3 for links):
@@ -101,15 +98,19 @@ Run the tests across all modules — this confirms your Go toolchain works
 end-to-end and the workspace resolves correctly:
 
 ```bash
-for m in pkg/types src/registry src/credential src/policy \
-         src/methods/email src/methods/sms \
-         src/methods/government-id-liveness src/server; do
-  echo "=== $m ==="
-  (cd "$m" && go test -race ./...) || { echo FAIL; exit 1; }
-done
+bash scripts/test-all.sh
 ```
 
-Expected: every line ends `ok`. Total time: ~15 seconds.
+Expected: every module `ok`, ending in `test-all: all modules green`.
+Total time: ~30 seconds. Then prove the round-1 path against a real server
+process (builds the binary, starts it on a loopback port, enrolls by email,
+issues, verifies with the CLI):
+
+```bash
+bash scripts/e2e-email.sh
+```
+
+Expected: `e2e PASSED`.
 
 Build the web app once so `node_modules/` is primed:
 
@@ -119,6 +120,54 @@ npm install
 npm run build
 cd ../..
 ```
+
+## 2b. Round 1 — email only (no vendor accounts except email delivery)
+
+The first cohort (a handful of friends) needs exactly one thing to work:
+**email delivery**. Everything else in §3 is optional for round 1.
+
+| Need | Round 1 | Later |
+|---|---|---|
+| Email magic link | **SendGrid** (free, 100/day) — §3b | same |
+| SMS OTP | skip (the web app shows **Skip for now**) | Twilio — §3c |
+| ID + selfie anchor | skip (step shows "unavailable") | Persona — §3a |
+| Server host | Fly.io — §6 | same |
+| Web host | Vercel — §7 | same |
+
+Round-1 credentials carry only the `email` method (strength 8, no anchor).
+They satisfy [`docs/policies/round1-email.yaml`](docs/policies/round1-email.yaml)
+and are rejected by every anchor-requiring policy (including OpenLine's
+vote/claim policies) with `anchor_missing` — by design. The friend-facing
+instructions are in [`FRIENDS.md`](FRIENDS.md); fill in the two URLs at the
+top once §6 and §7 are done.
+
+Deploy checklist for round 1, in order:
+
+1. `fly launch --no-deploy`, then `fly secrets set` with **only**
+   `ISSUER_ED25519_SK_B64`, `SENDGRID_API_KEY`, `SENDGRID_FROM` (§6).
+   Leave `DEV_EXPOSE_CHALLENGE_SECRETS` unset — with it on, anyone can
+   verify an address they don't own.
+2. `fly deploy`; set `SERVER_PUBLIC_URL`; `fly deploy` again.
+3. `vercel --prod` with `NEXT_PUBLIC_PERSONHOOD_SERVER_URL` (§7); set
+   `CORS_ALLOWED_ORIGINS` on Fly to the Vercel URL.
+4. Enroll yourself once from your phone using FRIENDS.md verbatim.
+5. Verify your own credential the way an integrator would:
+   ```bash
+   go run ./tools/verify-credential -cred me.json \
+       -policy docs/policies/round1-email.yaml -issuer-url https://<your-app>.fly.dev
+   ```
+6. Hand the issuer DID + public key to OpenLine to pin (it trusts issuers by
+   an explicit allow-list, not by fetching `did.json` at runtime):
+   ```bash
+   curl -s https://<your-app>.fly.dev/.well-known/did.json | jq -r '.id, .verificationMethod[0].publicKeyJwk.x'
+   ```
+   OpenLine constructs `personhood.TrustedIssuers({ "<id>": <x decoded from base64url> })`
+   and, for round 1, evaluates `docs/policies/round1-email.yaml` rather than its
+   anchor policies.
+
+**Keep the issuer key stable.** `ISSUER_ED25519_SK_B64` is the root of trust;
+rotating it invalidates every credential issued so far. Back it up (e.g. a
+password manager) the moment `gen-key` prints it.
 
 ## 3. Vendor signups
 
@@ -209,9 +258,16 @@ cd app/web
 npm run dev
 ```
 
-Open <http://localhost:3000>. You should see the Personhood UI with two
-methods listed (email + sms). Run through email + SMS — the magic link
-and the OTP are printed in the **server** terminal, not actually sent.
+Open <http://localhost:3000>. You should see the Personhood UI. Run through
+email (and optionally SMS) — the magic link and the OTP are printed in the
+**server** terminal, not actually sent. Paste the link into any tab; the
+email step notices within a few seconds. (`DEV_EXPOSE_CHALLENGE_SECRETS=1`
+additionally returns the link in the `/begin` API response for scripts —
+never set it on a deployed server.)
+
+If something else already listens on `:8080` (e.g. an OpenLine node), pick
+another port: `SERVER_ADDR=127.0.0.1:8090 SERVER_PUBLIC_URL=http://127.0.0.1:8090`
+and `NEXT_PUBLIC_PERSONHOOD_SERVER_URL=http://127.0.0.1:8090 npm run dev`.
 
 Once that's working locally, kill both processes; we move to real
 delivery + deploy next.
@@ -260,7 +316,9 @@ fly launch --no-deploy
 # If asked to pick an app name and one is taken, append your initials.
 ```
 
-Set every secret in one command:
+Set every secret in one command (round 1: only the first three lines are
+required — omit the Twilio/Persona ones and those methods simply do not
+register):
 
 ```bash
 SK=$(go run ./src/server/cmd/gen-key 2>/dev/null | grep ISSUER_ED25519 | cut -d= -f2)
@@ -402,6 +460,9 @@ that includes one anchor (ID + selfie) + two supplementary methods.
 | Icon is broken / generic | Manifest icons failed to render. | Open `https://<your-web>.vercel.app/icon.png` directly — should show the lime monogram. |
 | Persona flow opens but stays on "completing inquiry" forever | Webhook URL wrong, or `SERVER_PUBLIC_URL` was set incorrectly so Persona is calling a stale URL. | Confirm in Persona's webhook delivery log; redeploy after fixing. |
 | CORS errors in the browser console | `CORS_ALLOWED_ORIGINS` on the server doesn't include the Vercel URL. | `fly secrets set CORS_ALLOWED_ORIGINS=https://...` (exact origin, no trailing slash). |
+| Email step stays "waiting for click" after the link was opened | The link belonged to an older session (server restarted — sessions are in-memory), or the poll cannot reach the server. | Tap **Check again**; else **Start over**. `fly logs` shows the `/v1/sessions/` polls. |
+| A friend's credential fails `verify-credential` with `unknown_issuer` | The issuer key changed (`ISSUER_ED25519_SK_B64` rotated) or `-issuer-url` points at a different deployment. | `fly secrets list`; compare `.well-known/did.json` `x` with the `issuer_public_key_b64url` in the CLI output. |
+| `verify-credential` says `anchor_missing` | Expected for round-1 credentials against any anchor-requiring policy. | Use `docs/policies/round1-email.yaml`, or add an anchor method (Persona §3a/§8). |
 
 ## 12. Cost expectation
 
