@@ -146,3 +146,17 @@ export async function issueCredential(sessionID: string): Promise<{ credential: 
 export async function listMethods(): Promise<{ methods: MethodSummary[] }> {
   return getJSON('/v1/methods');
 }
+
+/**
+ * Poll the server's view of a session. Used to detect progress made out of
+ * band — e.g. the email magic link was clicked in another tab or on another
+ * device — instead of trusting the user to say "I clicked it".
+ */
+export async function getSession(sessionID: string): Promise<SessionView> {
+  return getJSON(`/v1/sessions/${encodeURIComponent(sessionID)}`);
+}
+
+/** True when the session has a successful ceremony recorded for methodID. */
+export function hasVerified(session: SessionView, methodID: string): boolean {
+  return session.verified_methods.some((m) => m.method_id === methodID);
+}

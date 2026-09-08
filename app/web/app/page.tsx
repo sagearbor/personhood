@@ -36,6 +36,7 @@ export default function Page() {
   }, []);
 
   const idAvailable = !!session?.available_methods.some((m) => m.id === 'government-id-liveness');
+  const smsAvailable = !!session?.available_methods.some((m) => m.id === 'sms');
 
   function markCompleted(id: StepId) {
     setCompleted((s) => new Set(s).add(id));
@@ -66,10 +67,12 @@ export default function Page() {
               <EmailStep
                 session={session}
                 done={completed.has('email')}
-                onSent={() => {/* sent; user must click link to verify */}}
+                onSent={() => {/* sent; the step polls the server until the link is clicked */}}
+                onVerified={() => markCompleted('email')}
                 onContinue={() => {
                   markCompleted('email');
-                  setStep('sms');
+                  // Round-1 deployments may not register SMS at all.
+                  setStep(smsAvailable ? 'sms' : 'id');
                 }}
               />
             )}
@@ -80,6 +83,10 @@ export default function Page() {
                 onVerified={() => markCompleted('sms')}
                 onContinue={() => {
                   markCompleted('sms');
+                  setStep('id');
+                }}
+                onSkip={() => {
+                  markSkipped('sms');
                   setStep('id');
                 }}
               />

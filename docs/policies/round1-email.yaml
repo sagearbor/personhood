@@ -1,0 +1,39 @@
+# Personhood "round 1" policy — email-only enrollment (DSL v1.0).
+#
+# For the first cohort (a handful of friends enrolling from a laptop or phone
+# with nothing but an email address), the issuer registers only the email
+# magic-link method (strength 8, supplementary) plus the always-on
+# ip-asn-reputation floor signal. No anchor is available yet: Persona / Plaid
+# need vendor accounts and a native shell is not shipped.
+#
+# This policy therefore accepts a credential that proves inbox control and
+# nothing more. It is deliberately weak — it says "this holder controlled an
+# email address when the credential was issued", NOT "this is a unique human".
+# Do not gate anything valuable with it. It exists so an integrator (OpenLine
+# in round 1) can prove the plumbing end to end: issue → present → verify →
+# nullifier, and swap in an anchor-requiring policy later without touching
+# code.
+#
+# OpenLine's operational policies (vote_casting.yaml, ubi_claim.yaml) require
+# an anchor verified within 24h and will reject round-1 credentials with
+# `anchor_missing`. That is by design.
+version: "1.0"
+policy_id: "personhood/round1-email/v1"
+action: "Round-1 plumbing check (email inbox control only)"
+
+# No anchor is registered in round 1.
+anchor_required: false
+
+# email = 8 points. ip-asn-reputation (10) is registered always-on but the
+# reference web app does not run its ceremony yet, so require only email.
+min_supplementary_points: 8
+allowed_methods: ["email", "ip-asn-reputation"]
+
+# The email method's own freshness lifetime is 90 days; the credential itself
+# expires after 365. Re-enroll at least every 90 days.
+max_credential_age_seconds: 7776000   # 90 days
+
+# Ask for a per-context nullifier so integrators can enforce one-credential-
+# one-action even at this weak tier. The server issues credentials without a
+# nullifierBinding in v0.1, so leave this off until holder keys land (v0.2).
+nullifier_required: false

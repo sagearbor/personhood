@@ -36,6 +36,10 @@ jobs:
         run: cd src/server && go test -race -count=1 -tags 'sendgrid twilio' ./...
       - name: Build server (production tags)
         run: cd src/server && go build -tags 'sendgrid twilio' -o /tmp/personhood-server ./cmd/server
+      # Round-1 path against a real server process (also covered by tests/,
+      # which test-all.sh runs; this is the human-runnable form).
+      - name: End-to-end email enrollment (scripts/e2e-email.sh)
+        run: bash scripts/e2e-email.sh
 
   web:
     runs-on: ubuntu-latest

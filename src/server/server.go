@@ -34,10 +34,10 @@ import (
 type Server struct {
 	cfg Config
 
-	issuerDID          types.DID
-	issuerVMethodID    string
-	issuerPublicKey    ed25519.PublicKey
-	statusListURL      string
+	issuerDID       types.DID
+	issuerVMethodID string
+	issuerPublicKey ed25519.PublicKey
+	statusListURL   string
 
 	registry *registry.Registry
 	issuer   *credential.Issuer
