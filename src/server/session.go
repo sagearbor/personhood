@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -30,10 +31,17 @@ type Session struct {
 	// generates 32 bytes of randomness, base64url-encoded.
 	ID string
 
-	// HolderDID is the DID the credential will be bound to. v0.1 generates
-	// it server-side from the SessionID (see did.go); future clients can
-	// provide their own public key in /enrollment/start.
+	// HolderDID is the DID the credential will be bound to. When the client
+	// supplied a holder public key in /enrollment/start, this is a real
+	// did:key derived from it; otherwise it is a v0.1 placeholder generated
+	// server-side from the SessionID (see did.go).
 	HolderDID types.DID
+
+	// HolderPublicKey is the client-supplied Ed25519 public key backing
+	// HolderDID, or nil if the client did not supply one (e.g. the round-1
+	// email-only flow). Carried on the session so /v1/credentials/issue can
+	// derive a NullifierBinding for it (see did.go NullifierBindingForHolder).
+	HolderPublicKey ed25519.PublicKey
 
 	// CreatedAt and ExpiresAt define the session's lifetime.
 	CreatedAt time.Time
@@ -203,9 +211,15 @@ func (s *SessionStore) Snapshot(sessionID string) (SessionView, error) {
 		anchor = &v
 	}
 
+	var holderPub ed25519.PublicKey
+	if len(sess.HolderPublicKey) == ed25519.PublicKeySize {
+		holderPub = append(ed25519.PublicKey(nil), sess.HolderPublicKey...)
+	}
+
 	return SessionView{
 		ID:                 sess.ID,
 		HolderDID:          sess.HolderDID,
+		HolderPublicKey:    holderPub,
 		CreatedAt:          sess.CreatedAt,
 		ExpiresAt:          sess.ExpiresAt,
 		VerifiedMethods:    methodsCopy,
@@ -217,8 +231,12 @@ func (s *SessionStore) Snapshot(sessionID string) (SessionView, error) {
 // SessionView is the lockless, JSON-friendly snapshot returned by Snapshot.
 // Mutating its fields has no effect on the underlying Session.
 type SessionView struct {
-	ID                 string                 `json:"id"`
-	HolderDID          types.DID              `json:"holder_did"`
+	ID        string    `json:"id"`
+	HolderDID types.DID `json:"holder_did"`
+	// HolderPublicKey is the client-supplied Ed25519 public key backing
+	// HolderDID (nil when the client did not supply one). Marshals as
+	// standard base64 under holder_public_key_b64; omitted entirely when nil.
+	HolderPublicKey    ed25519.PublicKey      `json:"holder_public_key_b64,omitempty"`
 	CreatedAt          time.Time              `json:"created_at"`
 	ExpiresAt          time.Time              `json:"expires_at"`
 	VerifiedMethods    []types.VerifiedMethod `json:"verified_methods"`

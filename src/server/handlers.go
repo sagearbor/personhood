@@ -131,6 +131,7 @@ func (s *Server) handleStartEnrollment(w http.ResponseWriter, r *http.Request) {
 	}
 	holderDID := HolderDIDForSession(sess.ID, holderPub)
 	sess.HolderDID = holderDID
+	sess.HolderPublicKey = holderPub
 
 	writeJSON(w, http.StatusOK, startEnrollmentResponse{
 		SessionID:        sess.ID,
@@ -354,7 +355,12 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 
 	issuedAt := s.nowFunc()
 	expiresAt := issuedAt.Add(s.credentialLifetime)
-	cred, err := s.issuer.Issue(view.HolderDID, view.VerifiedMethods, view.AnchorMethodID, nil, issuedAt, expiresAt, nil)
+	// NullifierBindingForHolder returns nil when the session has no
+	// client-supplied holder public key (e.g. the round-1 email-only flow),
+	// so such credentials are issued without a nullifierBinding and fail
+	// closed against any policy with nullifier_required: true.
+	nullifierBinding := NullifierBindingForHolder(view.HolderPublicKey)
+	cred, err := s.issuer.Issue(view.HolderDID, view.VerifiedMethods, view.AnchorMethodID, nullifierBinding, issuedAt, expiresAt, nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue_failed", err.Error())
 		return

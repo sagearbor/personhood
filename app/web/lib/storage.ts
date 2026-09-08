@@ -122,3 +122,39 @@ export async function clearSession(): Promise<void> {
   });
   db.close();
 }
+
+// --- holder Ed25519 keypair (see lib/holderkey.ts) -----------------------
+//
+// Persisted as raw base64 bytes rather than as CryptoKey objects so the
+// stored shape stays a plain, inspectable JSON value. See holderkey.ts's
+// module doc for the v0.1/v0.2 tradeoffs.
+
+const KEY_HOLDER_KEY = 'holder_key_v1';
+
+type StoredHolderKeyPair = {
+  publicKeyB64: string;
+  privateKeyB64: string;
+};
+
+export async function saveHolderKeyPair(pair: StoredHolderKeyPair): Promise<void> {
+  const db = await openDB();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_KV, 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.objectStore(STORE_KV).put(pair, KEY_HOLDER_KEY);
+  });
+  db.close();
+}
+
+export async function loadHolderKeyPair(): Promise<StoredHolderKeyPair | null> {
+  const db = await openDB();
+  const v: StoredHolderKeyPair | undefined = await new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_KV, 'readonly');
+    const req = tx.objectStore(STORE_KV).get(KEY_HOLDER_KEY);
+    req.onsuccess = () => resolve(req.result as StoredHolderKeyPair | undefined);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return v ?? null;
+}

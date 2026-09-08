@@ -9,6 +9,7 @@ import { IdStep } from '@/components/steps/IdStep';
 import { CredentialStep } from '@/components/steps/CredentialStep';
 import { startEnrollment, type StartEnrollmentResponse, type Credential, SERVER_URL } from '@/lib/api';
 import { selectEmailMethod, selectSmsMethod } from '@/lib/tiering';
+import { getOrCreateHolderKeyPair } from '@/lib/holderkey';
 
 export default function Page() {
   const [session, setSession] = useState<StartEnrollmentResponse | null>(null);
@@ -18,12 +19,19 @@ export default function Page() {
   const [skipped, setSkipped] = useState<Set<StepId>>(new Set());
   const [credential, setCredential] = useState<Credential | null>(null);
 
-  // Boot: ask the server for a session.
+  // Boot: generate (or load) the holder keypair, then ask the server for a
+  // session bound to it. A holder public key is what lets the issuer bind a
+  // real did:key DID + nullifierBinding onto the eventual credential (see
+  // lib/holderkey.ts); on browsers without WebCrypto Ed25519 support this
+  // resolves to null and enrollment proceeds exactly as it did before this
+  // feature existed (v0.1 placeholder DID, no nullifierBinding).
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const s = await startEnrollment({});
+        const keyPair = await getOrCreateHolderKeyPair();
+        if (!alive) return;
+        const s = await startEnrollment({ holderPublicKeyB64: keyPair?.publicKeyB64 });
         if (!alive) return;
         setSession(s);
       } catch (e) {
@@ -59,8 +67,12 @@ export default function Page() {
     setCompleted(new Set());
     setSkipped(new Set());
     setCredential(null);
-    // Triggers the boot effect again.
-    startEnrollment({}).then(setSession).catch((e) => setStartError(String(e)));
+    // Reuses the same persisted holder keypair (see lib/holderkey.ts) so a
+    // restart doesn't spuriously mint a new holder identity.
+    getOrCreateHolderKeyPair()
+      .then((keyPair) => startEnrollment({ holderPublicKeyB64: keyPair?.publicKeyB64 }))
+      .then(setSession)
+      .catch((e) => setStartError(String(e)));
   }
 
   return (

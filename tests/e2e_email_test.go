@@ -204,10 +204,11 @@ func TestE2E_EmailOnlyEnrollment(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type verifyOutput struct {
-	OK     bool                 `json:"ok"`
-	Code   types.EvaluationCode `json:"code"`
-	Human  string               `json:"human"`
-	Issuer types.DID            `json:"issuer"`
+	OK        bool                 `json:"ok"`
+	Code      types.EvaluationCode `json:"code"`
+	Human     string               `json:"human"`
+	Issuer    types.DID            `json:"issuer"`
+	Nullifier string               `json:"nullifier,omitempty"`
 }
 
 func runVerify(t *testing.T, bin, cred, policy, issuerURL string) (verifyOutput, int) {

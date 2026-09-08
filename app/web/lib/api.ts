@@ -70,6 +70,11 @@ export type Credential = {
     id: string;
     verifiedMethods: VerifiedMethod[];
     anchorMethodId?: string | null;
+    nullifierBinding?: {
+      commitment: string;
+      curve: string;
+      scheme: string;
+    } | null;
   };
   proof?: {
     type: string;
@@ -110,10 +115,19 @@ async function getJSON<T>(path: string): Promise<T> {
 export async function startEnrollment(opts: {
   userAgent?: string;
   platform?: string;
+  /**
+   * Base64-encoded raw Ed25519 public key (see lib/holderkey.ts). When
+   * supplied, the server binds a real did:key holder DID and a
+   * nullifierBinding onto the eventual credential instead of the v0.1
+   * placeholder DID with no nullifierBinding. Omit to fall back to the old
+   * behavior.
+   */
+  holderPublicKeyB64?: string;
 }): Promise<StartEnrollmentResponse> {
   return postJSON<StartEnrollmentResponse>('/enrollment/start', {
     user_agent: opts.userAgent || (typeof navigator !== 'undefined' ? navigator.userAgent : ''),
     platform: opts.platform || 'web',
+    holder_public_key_b64: opts.holderPublicKeyB64 || undefined,
   });
 }
 
