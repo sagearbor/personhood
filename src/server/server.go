@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/sagearbor/personhood/pkg/types"
@@ -16,12 +17,14 @@ import (
 	captchamethod "github.com/sagearbor/personhood/src/methods/captcha-turnstile"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	emailtiermethod "github.com/sagearbor/personhood/src/methods/email-tier"
+	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
 	govidmethod "github.com/sagearbor/personhood/src/methods/government-id-liveness"
 	ipasnmethod "github.com/sagearbor/personhood/src/methods/ip-asn-reputation"
 	paidcardmethod "github.com/sagearbor/personhood/src/methods/paid-billing-card"
 	carriertiermethod "github.com/sagearbor/personhood/src/methods/phone-carrier-tier"
 	plaidmethod "github.com/sagearbor/personhood/src/methods/plaid-bank-link"
 	smsmethod "github.com/sagearbor/personhood/src/methods/sms"
+	socialvouching "github.com/sagearbor/personhood/src/methods/social-vouching"
 	"github.com/sagearbor/personhood/src/registry"
 )
 
@@ -423,6 +426,55 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		if err := reg.Register(emailTier); err != nil {
 			return Dependencies{}, fmt.Errorf("register email-tier: %w", err)
 		}
+	}
+
+	// fuzzy-extractor-selfie (checklist #10a): the airdrop-test anchor for
+	// users with no ID/bank/address. Unlike every other anchor, this wraps
+	// NO third-party vendor (see the package doc comment) — there is no
+	// vendor credential to gate on, so registration is instead an explicit
+	// opt-in via FUZZY_EXTRACTOR_ENABLED, consistent with this repo's
+	// pattern of not silently changing what a default deployment advertises.
+	if os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
+		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{
+			Accumulator: fuzzyextractorselfie.NewInMemoryAccumulator(),
+		})
+		if err := reg.Register(fuzzy); err != nil {
+			return Dependencies{}, fmt.Errorf("register fuzzy-extractor-selfie: %w", err)
+		}
+	}
+
+	// social-vouching-graph (checklist #10b): the BrightID-style web-of-
+	// trust supplementary method. Like fuzzy-extractor-selfie, no vendor is
+	// involved; registration is opt-in via SOCIAL_VOUCHING_ENABLED because
+	// the method is useless without an operator-configured seed set
+	// (SOCIAL_VOUCHING_SEED_IDS, comma-separated, each seeded at trust 1.0)
+	// and a shared secret for the dev voucher authenticator
+	// (SOCIAL_VOUCHING_SECRET). See src/methods/social-vouching/README.md.
+	if os.Getenv("SOCIAL_VOUCHING_ENABLED") != "" {
+		secret := os.Getenv("SOCIAL_VOUCHING_SECRET")
+		if secret == "" {
+			return Dependencies{}, fmt.Errorf("social-vouching-graph: SOCIAL_VOUCHING_ENABLED is set but SOCIAL_VOUCHING_SECRET is empty")
+		}
+		seeds := make(map[string]float64)
+		for _, id := range strings.Split(os.Getenv("SOCIAL_VOUCHING_SEED_IDS"), ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				seeds[id] = 1.0
+			}
+		}
+		vouching := socialvouching.NewMethod(socialvouching.Config{
+			Store:         socialvouching.NewInMemoryGraphStore(seeds),
+			Authenticator: socialvouching.NewHMACDevAuthenticator(secret),
+		})
+		if err := reg.Register(vouching); err != nil {
+			return Dependencies{}, fmt.Errorf("register social-vouching-graph: %w", err)
+		}
+		deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
+			MethodID: socialvouching.MethodID,
+			Path:     "vouch",
+			Method:   http.MethodPost,
+			Handler:  vouching.VouchHandler(nil),
+		})
 	}
 
 	return deps, nil

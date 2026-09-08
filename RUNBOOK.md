@@ -169,6 +169,62 @@ Deploy checklist for round 1, in order:
 rotating it invalidates every credential issued so far. Back it up (e.g. a
 password manager) the moment `gen-key` prints it.
 
+## 2c. Airdrop-test anchors — fuzzy-extractor-selfie + social-vouching-graph (no vendor accounts)
+
+STATUS.md checklist #10a/#10b: for OpenLine's UBI-claim / vote-eligibility
+use cases, anchors must work for users with no ID, no bank, and no fixed
+address. Unlike every other anchor/supplementary method in §3, **neither of
+these needs a vendor signup** — both are self-hosted. That also means both
+are off by default; turn them on with env vars.
+
+**`fuzzy-extractor-selfie`** (anchor, strength 70, $0.00) — set:
+
+```bash
+FUZZY_EXTRACTOR_ENABLED=1
+```
+
+That's the whole configuration. See
+[`src/methods/fuzzy-extractor-selfie/README.md`](src/methods/fuzzy-extractor-selfie/README.md)
+for what it does and does not do — notably, it accepts an already-binarized
+biometric template; the on-device face-embedding extraction and liveness
+check are a client concern this session did not wire into `app/web` (out of
+scope; see that README's "What this module does NOT do").
+
+**`social-vouching-graph`** (supplementary, strength 35, $0.00) — a
+BrightID-style web of trust needs a bootstrap seed set and a shared secret
+for the dev voucher authenticator:
+
+```bash
+SOCIAL_VOUCHING_ENABLED=1
+SOCIAL_VOUCHING_SECRET=<a long random string; treat like a password>
+SOCIAL_VOUCHING_SEED_IDS=alice,bob,carol   # comma-separated, each seeded at trust 1.0
+```
+
+Without at least a few seed ids (and, per the method's `RequiredVouches`
+default of 3, ideally more than that reachable via chained vouching — see
+the README), nobody can ever pass the ceremony. See
+[`src/methods/social-vouching/README.md`](src/methods/social-vouching/README.md)
+for the vouch-submission flow and why this stays supplementary rather than
+an anchor despite STATUS.md's checklist wording.
+
+**Try it locally** (mirrors §4's local dev flow, using
+[`docs/policies/airdrop-anchor-example.yaml`](docs/policies/airdrop-anchor-example.yaml)):
+
+```bash
+export PATH=$PWD/tmp/go/bin:$PATH   # this repo's private Go toolchain, if you don't have go on PATH
+export FUZZY_EXTRACTOR_ENABLED=1
+SEED=$(cd src/server && go run ./cmd/gen-key)
+ISSUER_ED25519_SK_B64=$SEED SERVER_ADDR=127.0.0.1:8090 SERVER_PUBLIC_URL=http://127.0.0.1:8090 \
+  CORS_ALLOWED_ORIGINS=http://localhost:3000 \
+  go run ./src/server/cmd/server &
+
+curl -s http://127.0.0.1:8090/v1/methods | jq '.methods[] | select(.id=="fuzzy-extractor-selfie")'
+```
+
+`tests/e2e_airdrop_anchors_test.go` runs the full flow (including the
+social-vouching vouch endpoint) against a real compiled server binary — read
+it for the exact request shapes if you're integrating a client.
+
 ## 3. Vendor signups
 
 Open a notes app — you'll be copying keys into `.env.local` shortly. Each
@@ -524,9 +580,14 @@ Free tier covers a personal demo indefinitely.
 | SendGrid | 100 emails/day forever | ~$20/mo for 50k/mo |
 | Twilio | ~$15 trial credit, then pay-as-you-go | ~$0.0075/SMS in the US |
 | Persona | Sandbox is free unlimited; production starts at ~$1.50/inquiry | Variable |
+| fuzzy-extractor-selfie | $0.00 — self-hosted, no vendor | $0.00 |
+| social-vouching-graph | $0.00 — self-hosted, no vendor | $0.00 |
 
 The demo's per-verification cost is ~$2 dominated by Persona. The
-single-call SMS verification is a fraction of a penny.
+single-call SMS verification is a fraction of a penny. The two airdrop-test
+methods (§2c) add nothing to that bill — they exist precisely because a
+deployment that needs to stay free (or reach users with no ID/bank/address)
+can't rely on Persona/Plaid at all.
 
 ## Next
 

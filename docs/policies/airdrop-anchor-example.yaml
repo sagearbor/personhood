@@ -1,0 +1,38 @@
+# Personhood "airdrop-test anchor" example policy (DSL v1.0).
+#
+# STATUS.md checklist #10a/#10b: OpenLine's UBI-claim / vote-eligibility use
+# cases need an anchor that works for users with no government ID, no bank
+# account, and no fixed address. This example accepts EITHER of the two
+# checklist #10 methods as the anchor/floor signal:
+#
+#   - fuzzy-extractor-selfie (strength 70, anchor) — on-device biometric
+#     key derivation + a server-side accumulator dedup check, no vendor.
+#   - social-vouching-graph (strength 35, supplementary — see that method's
+#     README for why the catalog scores it below the 50-point anchor floor
+#     despite STATUS.md's checklist wording).
+#
+# Both pass the airdrop test (docs/06-methods-catalog.md's "Airdrop" column):
+# neither requires documents, banking, or a jurisdiction-specific credential.
+#
+# Also demands a per-context nullifier: fuzzy-extractor-selfie's
+# AttestationDigest (a biometric commitment, stable per-person via the
+# accumulator's dedup check) drives the credential's nullifierBinding in
+# preference to the holder's device key — see src/server/did.go's
+# NullifierBindingForBiometricCommitment — so a policy like this one can
+# enforce one-person-one-claim even though the holder could otherwise
+# regenerate an unlimited number of device keypairs.
+#
+# See tests/e2e_airdrop_anchors_test.go for both methods proven against a
+# real server + tools/verify-credential.
+version: "1.0"
+policy_id: "personhood/airdrop-anchor-example/v1"
+action: "Airdrop-test-compatible anchor check (example)"
+
+anchor_required: true
+min_supplementary_points: 0
+allowed_methods: ["fuzzy-extractor-selfie", "social-vouching-graph"]
+
+max_anchor_method_age_seconds: 15552000   # 180 days, matching fuzzy-extractor-selfie's freshness
+
+nullifier_required: true
+nullifier_context_tag: "personhood/docs-example/airdrop-claim"
