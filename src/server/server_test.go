@@ -550,8 +550,8 @@ func TestConfig_DecodeIssuerKey(t *testing.T) {
 }
 
 func TestSession_RecordRejectsAfterIssued(t *testing.T) {
-	store := NewSessionStore(time.Minute)
-	sess, err := store.Create("did:test:holder:1", time.Now())
+	store := NewInMemorySessionStore(time.Minute)
+	sess, err := store.Create(nil, time.Now())
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

@@ -120,24 +120,17 @@ func (s *Server) handleStartEnrollment(w http.ResponseWriter, r *http.Request) {
 		holderPub = raw
 	}
 
-	// Generate a placeholder session ID to derive the holder DID; the store
-	// will ultimately regenerate one — but because the DID depends on the
-	// session ID, derive once and reuse. We do this in two steps to avoid
-	// exposing randomSessionID outside session.go.
-	sess, err := s.sessions.Create("", s.nowFunc())
+	view, err := s.sessions.Create(holderPub, s.nowFunc())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "session_create_failed", err.Error())
 		return
 	}
-	holderDID := HolderDIDForSession(sess.ID, holderPub)
-	sess.HolderDID = holderDID
-	sess.HolderPublicKey = holderPub
 
 	writeJSON(w, http.StatusOK, startEnrollmentResponse{
-		SessionID:        sess.ID,
-		HolderDID:        holderDID,
+		SessionID:        view.ID,
+		HolderDID:        view.HolderDID,
 		IssuerDID:        s.issuerDID,
-		ExpiresAt:        sess.ExpiresAt,
+		ExpiresAt:        view.ExpiresAt,
 		AvailableMethods: s.methodSummaries(),
 	})
 }
@@ -213,7 +206,7 @@ func (s *Server) redactChallenge(ch types.ChallengeData) types.ChallengeData {
 // /credentials/issue, so knowing it is the authorization.
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
-	view, err := s.sessions.Snapshot(sessionID)
+	view, err := s.sessions.Get(sessionID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "session_not_found", err.Error())
 		return
@@ -261,7 +254,7 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	view, _ := s.sessions.Snapshot(sess.ID)
+	view, _ := s.sessions.Get(sess.ID)
 	writeJSON(w, http.StatusOK, completeMethodResponse{Result: result, Session: view})
 }
 
@@ -337,7 +330,7 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	view, err := s.sessions.Snapshot(req.SessionID)
+	view, err := s.sessions.Get(req.SessionID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "session_not_found", err.Error())
 		return

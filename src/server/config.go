@@ -9,9 +9,13 @@
 // store, and the method registry it was constructed with. It is safe to share
 // across goroutines; net/http calls into Server's handlers concurrently.
 //
-// The v0.1 reference deployment is single-process and in-memory: sessions and
-// method-store state vanish on restart. Production deployments should swap
-// SessionStore + the per-method stores for Redis-backed implementations.
+// The v0.1 reference deployment is single-process and in-memory by default:
+// sessions and method-store state vanish on restart. Set REDIS_URL to swap
+// SessionStore, email.TokenStore, sms.OTPStore, and
+// government-id-liveness's ResultStore for Redis-backed implementations
+// (see NewSessionStoreFromEnv / *.NewTokenStoreFromEnv /
+// *.NewOTPStoreFromEnv / *.NewResultStoreFromEnv) so sessions survive
+// restarts and are shared across horizontally scaled replicas.
 package server
 
 import (

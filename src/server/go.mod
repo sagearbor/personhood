@@ -4,6 +4,7 @@ go 1.22.0
 
 require (
 	github.com/go-chi/chi/v5 v5.1.0
+	github.com/sagearbor/personhood/pkg/redisclient v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/pkg/types v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/credential v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/app-attest-device v0.0.0-00010101000000-000000000000
@@ -26,6 +27,7 @@ require (
 )
 
 replace (
+	github.com/sagearbor/personhood/pkg/redisclient => ../../pkg/redisclient
 	github.com/sagearbor/personhood/pkg/types => ../../pkg/types
 	github.com/sagearbor/personhood/src/credential => ../credential
 	github.com/sagearbor/personhood/src/methods/app-attest-device => ../methods/app-attest-device

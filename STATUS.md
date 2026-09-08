@@ -6,9 +6,17 @@
 
 ---
 
-## Current state — last updated 2026-09-08 (overnight round-1 session)
+## Current state — last updated 2026-09-08 (overnight round-3 session)
 
-`main` is green in CI again (it had been red since 2026-06-15: the Dockerfile
+Since the round-1/round-2 sessions below: issued credentials now carry a real
+`did:key` holder DID and a `nullifierBinding` when the web app supplies a
+holder public key (#35), and `SessionStore` / `email.TokenStore` /
+`sms.OTPStore` / `government-id-liveness.ResultStore` all gained Redis-backed
+implementations selected via `REDIS_URL`, with in-memory remaining the
+default. See the two new "What's implemented" rows above the "What's stub"
+table for detail — both were this session's scope, carried over from the
+round-2 wrapup's `next_steps`. Everything below this paragraph documents the
+earlier round-1 session. `main` is green in CI again (it had been red since 2026-06-15: the Dockerfile
 missed newly added go.work modules — fixed in #28, and the image now builds
 with `GOWORK=off` so go.work changes cannot break it). The **round-1 path is
 real**: a friend with only an email address enrolls, the web app notices the
@@ -70,6 +78,8 @@ anchor verified within 24h, so round-1 credentials are rejected there with
 | **Integrator SDK (TypeScript)** | `sdk/typescript/` | `@personhood/sdk` — `new Verifier(trustedIssuers).verify(vcJson, policy)`, same surface as the Go SDK, ESM with **zero runtime deps** (WebCrypto + `DecompressionStream` + `fetch`). Hand-rolled RFC 8785 JCS canonicalizer that preserves large integers, Ed25519 verify, Status List 2021, full policy evaluator port, SHA-256 nullifier. **Cross-language interop proven**: a fixture issued by the Go reference issuer (`tools/gen-ts-fixture`) verifies and reproduces the exact nullifier. 13 vitest tests green; `tsc` typecheck + build clean. |
 | Design docs | `docs/` | 5 specs covering architecture, methods, credential format, policy DSL, OpenLine refactor. ~14k words. `docs/02-methods.md` now includes a delivery env-var matrix per vendor + a build-tag matrix. |
 | Methods catalog | `docs/06-methods-catalog.md` | 3-agent brainstorm of ~40 additional methods with comparison table and prioritized roadmap. |
+| **Holder did:key + nullifierBinding** | `app/web/lib/holderkey.ts`, `src/server/did.go`, `src/server/base58.go` | The web app generates a real Ed25519 keypair via WebCrypto on first boot (persisted in IndexedDB) and sends the public key on `POST /enrollment/start`; the server encodes it as a real `did:key:z...` (hand-rolled base58btc, no new dep) instead of the old opaque placeholder, and populates `credentialSubject.nullifierBinding` (stub Pedersen-shaped commitment, `bn254`/`pedersen-v1`) at `/v1/credentials/issue`. Sessions without a client key still get the v0.1 placeholder DID and no `nullifierBinding`, so `nullifier_required` policies fail closed. `tools/verify-credential` and `sdk/go` needed no changes — their nullifier derivation was already generic. Unblocks OpenLine's per-action nullifiers. `docs/policies/nullifier-example.yaml` fixture. Proven with a real Chrome browser run (WebCrypto keygen → issued credential → verified by the actual `verify-credential` binary) plus `tests/e2e_nullifier_test.go` (bound session → `nullifier_required` passes with a derived nullifier; unbound session → `nullifier_missing`). |
+| **Redis-backed stores** | `pkg/redisclient/`, `src/server/session_redis.go`, `src/methods/{email,sms,government-id-liveness}/store_redis.go` | Hand-rolled, dependency-free RESP2 client (`pkg/redisclient` — matches every other vendor integration in this repo being a plain net client, not an SDK). `SessionStore`, `email.TokenStore`, `sms.OTPStore`, and `government-id-liveness.ResultStore` each gained a Redis-backed implementation selected via `REDIS_URL` (`NewSessionStoreFromEnv` / `*.NewTokenStoreFromEnv` / `*.NewOTPStoreFromEnv` / `*.NewResultStoreFromEnv`); in-memory remains the default when `REDIS_URL` is unset, so round-1-scale deployments are unaffected. `SessionStore` is now an interface (`InMemorySessionStore` + `RedisSessionStore`); all `SessionStore` methods return `SessionView` (a plain value) rather than a mutable pointer, so both backends share one call-site contract. Verified against a real local Redis (not just mocked): unit + integration tests for all four stores, plus a full curl-driven enrollment→issuance run against the actual server binary with `REDIS_URL` set, confirming real `personhood:session:*` / `personhood:email-token:*` keys in Redis. |
 
 ### What's stub
 
@@ -78,8 +88,6 @@ anchor verified within 24h, so round-1 credentials are rejected there with
 | **Anchor method (App Attest)** | `src/methods/phone-liveness/` | Apple App Attest + Google Play Integrity server-side validators; client-side ceremony driver. Was the original v0.1 anchor; superseded for the demo by `government-id-liveness`. Useful for a future native shell that can attest in-app. | ~3–5 days |
 | **Mobile app (Capacitor wrap)** | `app/mobile/` | Sprint 3 — see below. Wrap `app/web` in Capacitor; ship to Play Store internal track. | ~3–5 days incl. store paperwork |
 | **Signed status list** | `src/credential/` + `src/server/` | The `/v1/status-list/{id}` endpoint currently returns an unsigned placeholder. v0.2 will sign it like a normal credential. | ~½ day |
-| **did:key holder DIDs** | `src/server/did.go` | Currently emits `did:personhood:holder:<sha256>` to avoid a base58 dep. v0.2 web app generates a WebCrypto Ed25519 keypair and provides the public key in `/enrollment/start`. | ~1 day |
-| **Redis-backed stores** | `src/server/session.go`, `src/methods/{email,sms,government-id-liveness}/store.go` | All four stores are in-memory; horizontal scaling needs a shared backend. | ~½ day |
 
 ---
 

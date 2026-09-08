@@ -7,9 +7,14 @@ Reference REST API for the Personhood issuer. Wires together
 [`src/methods/sms`](../methods/sms)) into HTTP endpoints a web/mobile client
 can drive an enrollment ceremony over.
 
-The server is **stateless across restarts** in v0.1: sessions and per-method
-state live in memory. Production deployments should swap in Redis-backed
-implementations of `SessionStore`, `email.TokenStore`, and `sms.OTPStore`.
+The server is **stateless across restarts** by default: sessions and
+per-method state live in memory. Set `REDIS_URL` (e.g.
+`redis://localhost:6379`, or `redis://:password@host:6379/1` with auth and a
+DB index) to switch `SessionStore`, `email.TokenStore`, `sms.OTPStore`, and
+`government-id-liveness`'s `ResultStore` to Redis-backed implementations, so
+sessions and ceremony state survive restarts and are shared across
+horizontally scaled replicas. Unset (the default) keeps everything in
+memory — no code change, no Redis dependency for round-1-scale deployments.
 
 ## Run locally
 
