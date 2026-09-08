@@ -9,15 +9,21 @@ require (
 	github.com/sagearbor/personhood/src/methods/app-attest-device v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/captcha-turnstile v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/email v0.0.0-00010101000000-000000000000
+	github.com/sagearbor/personhood/src/methods/email-tier v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/government-id-liveness v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/ip-asn-reputation v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/paid-billing-card v0.0.0-00010101000000-000000000000
+	github.com/sagearbor/personhood/src/methods/phone-carrier-tier v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/plaid-bank-link v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/sms v0.0.0-00010101000000-000000000000
+	github.com/sagearbor/personhood/src/policy v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/registry v0.0.0-00010101000000-000000000000
 )
 
-require github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
+require (
+	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
 
 replace (
 	github.com/sagearbor/personhood/pkg/types => ../../pkg/types
@@ -25,9 +31,11 @@ replace (
 	github.com/sagearbor/personhood/src/methods/app-attest-device => ../methods/app-attest-device
 	github.com/sagearbor/personhood/src/methods/captcha-turnstile => ../methods/captcha-turnstile
 	github.com/sagearbor/personhood/src/methods/email => ../methods/email
+	github.com/sagearbor/personhood/src/methods/email-tier => ../methods/email-tier
 	github.com/sagearbor/personhood/src/methods/government-id-liveness => ../methods/government-id-liveness
 	github.com/sagearbor/personhood/src/methods/ip-asn-reputation => ../methods/ip-asn-reputation
 	github.com/sagearbor/personhood/src/methods/paid-billing-card => ../methods/paid-billing-card
+	github.com/sagearbor/personhood/src/methods/phone-carrier-tier => ../methods/phone-carrier-tier
 	github.com/sagearbor/personhood/src/methods/plaid-bank-link => ../methods/plaid-bank-link
 	github.com/sagearbor/personhood/src/methods/sms => ../methods/sms
 	github.com/sagearbor/personhood/src/policy => ../policy

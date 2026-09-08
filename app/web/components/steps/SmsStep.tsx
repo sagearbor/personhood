@@ -12,11 +12,14 @@ export function SmsStep({
   done,
   onVerified,
   onContinue,
+  onSkip,
 }: {
   session: StartEnrollmentResponse;
   done: boolean;
   onVerified: () => void;
   onContinue: () => void;
+  /** Optional: lets the user continue without SMS (round-1 deployments have no SMS delivery). */
+  onSkip?: () => void;
 }) {
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
@@ -95,7 +98,17 @@ export function SmsStep({
             <Button onClick={sendCode} loading={status === 'pending'} disabled={!phone.trim().startsWith('+')}>
               Text me a code
             </Button>
+            {onSkip && (
+              <Button variant="ghost" onClick={onSkip}>
+                Skip for now &rarr;
+              </Button>
+            )}
           </div>
+          {onSkip && (
+            <p className="hint">
+              Optional. Skipping only lowers the credential&apos;s supplementary points; you can re-enroll later.
+            </p>
+          )}
         </>
       )}
 
@@ -136,6 +149,11 @@ export function SmsStep({
           display: flex;
           gap: var(--s-3);
           flex-wrap: wrap;
+        }
+        .hint {
+          margin: 0;
+          font-size: 13px;
+          color: var(--ink-muted);
         }
       `}</style>
     </Card>
