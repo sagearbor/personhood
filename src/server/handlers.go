@@ -264,12 +264,17 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, completeMethodResponse{Result: result, Session: view})
 }
 
-// handleEmailMagicLink is the GET /v1/methods/email/verify endpoint the email
-// method's magic link points at. It calls the email method's CompleteCeremony
-// internally (so issuing a separate POST is not required) and renders a small
-// HTML page so the user knows the click succeeded.
+// handleEmailMagicLink is the GET /v1/methods/email/verify endpoint every
+// magic-link email points at — both the plain "email" method and the
+// strength-22 "email-tier" upgrade (checklist #8) share this single landing
+// route so there is one base URL to expose publicly. It calls the target
+// method's CompleteCeremony internally (so issuing a separate POST is not
+// required) and renders a small HTML page so the user knows the click
+// succeeded.
 //
-// Query parameters: session=<sessionID>, token=<magic-link-token>.
+// Query parameters: session=<sessionID>, token=<magic-link-token>,
+// method=<methodID> (optional, defaults to "email" so links minted before
+// this parameter existed keep working).
 func (s *Server) handleEmailMagicLink(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("session")
 	token := r.URL.Query().Get("token")
@@ -277,9 +282,13 @@ func (s *Server) handleEmailMagicLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_params", "session and token query parameters are required")
 		return
 	}
-	method, ok := s.registry.Get("email")
+	methodID := r.URL.Query().Get("method")
+	if methodID == "" {
+		methodID = "email"
+	}
+	method, ok := s.registry.Get(methodID)
 	if !ok {
-		writeError(w, http.StatusNotFound, "method_not_found", "email method is not registered")
+		writeError(w, http.StatusNotFound, "method_not_found", fmt.Sprintf("%s method is not registered", methodID))
 		return
 	}
 	sess, err := s.sessions.Get(sessionID)
@@ -290,7 +299,7 @@ func (s *Server) handleEmailMagicLink(w http.ResponseWriter, r *http.Request) {
 
 	cc := types.CeremonyContext{
 		SessionID: sess.ID,
-		MethodID:  "email",
+		MethodID:  methodID,
 		IssuerDID: s.issuerDID,
 		StartedAt: sess.CreatedAt,
 	}

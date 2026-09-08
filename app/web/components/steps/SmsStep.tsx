@@ -5,22 +5,26 @@ import { Button } from '../Button';
 import { Card } from '../Card';
 import { Field } from '../Field';
 import type { Status } from '../StatusPill';
-import { beginMethod, completeMethod, type StartEnrollmentResponse } from '@/lib/api';
+import { beginMethod, completeMethod, type MethodSummary, type StartEnrollmentResponse } from '@/lib/api';
 
 export function SmsStep({
   session,
+  method,
   done,
   onVerified,
   onContinue,
   onSkip,
 }: {
   session: StartEnrollmentResponse;
+  /** The method to drive — 'phone-carrier-tier' when the server advertises it, else plain 'sms'. See lib/tiering.ts. */
+  method: MethodSummary;
   done: boolean;
   onVerified: () => void;
   onContinue: () => void;
   /** Optional: lets the user continue without SMS (round-1 deployments have no SMS delivery). */
   onSkip?: () => void;
 }) {
+  const methodID = method.id;
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [status, setStatus] = useState<Status>(done ? 'ok' : 'idle');
@@ -33,7 +37,7 @@ export function SmsStep({
     setStatus('pending');
     setStatusText('sending code');
     try {
-      await beginMethod('sms', session.session_id, phone.trim());
+      await beginMethod(methodID, session.session_id, phone.trim());
       setStatus('ok');
       setStatusText('code sent');
       setStage('enter-code');
@@ -49,7 +53,7 @@ export function SmsStep({
     setStatus('pending');
     setStatusText('verifying');
     try {
-      const res = await completeMethod('sms', session.session_id, {
+      const res = await completeMethod(methodID, session.session_id, {
         type: 'otp',
         payload: { phone_number: phone.trim(), code: code.trim() },
       });
@@ -79,7 +83,7 @@ export function SmsStep({
       }
       status={status}
       statusLabel={statusText}
-      footer={<span>Method ID <code>sms</code> · strength 12 · supplementary</span>}
+      footer={<span>Method ID <code>{method.id}</code> · strength {method.strength} · supplementary</span>}
     >
       {!done && stage === 'enter-phone' && (
         <>
