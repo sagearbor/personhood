@@ -19,6 +19,7 @@ import (
 //	GET  /.well-known/did.json                 — issuer DID document
 //	GET  /v1/methods                           — list registered methods
 //	POST /enrollment/start                     — create a session
+//	GET  /v1/sessions/{sessionId}              — poll session progress
 //	POST /v1/methods/{methodId}/begin          — start a method ceremony
 //	POST /v1/methods/{methodId}/complete       — submit ceremony response
 //	GET  /v1/methods/email/verify              — magic-link landing
@@ -35,6 +36,7 @@ func (s *Server) Router() http.Handler {
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/methods", s.handleListMethods)
+		r.Get("/sessions/{sessionId}", s.handleGetSession)
 
 		r.Route("/methods/{methodId}", func(r chi.Router) {
 			r.Post("/begin", s.handleBeginMethod)

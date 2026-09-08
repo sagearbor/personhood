@@ -41,7 +41,8 @@ All requests/responses are JSON unless noted.
 | GET  | `/.well-known/did.json` | Issuer DID document (Ed25519 public key as a JWK). |
 | GET  | `/v1/methods` | List the registered methods (id, type, strength, friction, version). |
 | POST | `/enrollment/start` | Create a session. Returns `{session_id, holder_did, issuer_did, expires_at, available_methods}`. |
-| POST | `/v1/methods/{methodId}/begin` | Body: `{session_id, user_input}`. Returns the method's `ChallengeData`. |
+| GET  | `/v1/sessions/{sessionId}` | Poll a session's progress (`verified_methods`, `anchor_method_id`, `issued_credential_id`). The web app polls this to notice the magic link was clicked in another tab/device. |
+| POST | `/v1/methods/{methodId}/begin` | Body: `{session_id, user_input}`. Returns the method's `ChallengeData` with secret fields (`magic_link_url`) redacted unless `DEV_EXPOSE_CHALLENGE_SECRETS=1`. |
 | POST | `/v1/methods/{methodId}/complete` | Body: `{session_id, response}`. Records the result on the session and returns `{result, session}`. |
 | GET  | `/v1/methods/email/verify?session=...&token=...` | Magic-link landing for the email method; calls `CompleteCeremony` internally and renders an HTML success/failure page. |
 | POST | `/v1/credentials/issue` (and `/credentials/issue` alias) | Body: `{session_id}`. Issues the W3C VC for the session's accumulated `VerifiedMethods`. Single-use per session. |

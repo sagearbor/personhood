@@ -74,6 +74,13 @@ func (s *recordingSMSSender) lastOTP() string {
 // inspect ceremonies + verify the issued credential.
 func newTestServer(t *testing.T) (string, *Server, *recordingEmailSender, *recordingSMSSender, func()) {
 	t.Helper()
+	return newTestServerWith(t, nil)
+}
+
+// newTestServerWith is newTestServer with a hook to adjust the Config before
+// the server is constructed (e.g. to flip ExposeChallengeSecrets).
+func newTestServerWith(t *testing.T, mutate func(*Config)) (string, *Server, *recordingEmailSender, *recordingSMSSender, func()) {
+	t.Helper()
 
 	emailSender := &recordingEmailSender{}
 	smsSender := &recordingSMSSender{}
@@ -115,6 +122,9 @@ func newTestServer(t *testing.T) (string, *Server, *recordingEmailSender, *recor
 		IssuerPrivateKey:   priv,
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
 		SessionTTL:         10 * time.Minute,
+	}
+	if mutate != nil {
+		mutate(&cfg)
 	}
 	srv, err := NewServer(cfg, Dependencies{Registry: reg})
 	if err != nil {

@@ -17,30 +17,21 @@ FROM golang:${GO_VERSION}-bookworm AS builder
 
 WORKDIR /src
 
-# Copy the workspace + all module files first so the cache stays warm when
-# only application code changes. The .dockerignore at the repo root keeps
-# host artifacts (node_modules, .next, etc.) out of the build context.
-COPY go.work go.work.sum* ./
-COPY pkg/types/go.mod                              pkg/types/go.mod
-COPY src/registry/go.mod                           src/registry/go.mod
-COPY src/credential/go.mod   src/credential/go.sum src/credential/
-COPY src/policy/go.mod                             src/policy/go.mod
-COPY src/methods/email/go.mod                      src/methods/email/go.mod
-COPY src/methods/sms/go.mod                        src/methods/sms/go.mod
-COPY src/methods/phone-liveness/go.mod             src/methods/phone-liveness/go.mod
-COPY src/methods/government-id-liveness/go.mod     src/methods/government-id-liveness/go.mod
-COPY src/server/go.mod       src/server/go.sum     src/server/
-COPY sdk/go/go.mod                                 sdk/go/go.mod
-
-# Use a sentinel target so module downloads are cached as their own layer.
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
-    cd src/server && go mod download
-
-# Copy the actual sources now.
+# Build the server as a standalone module (GOWORK=off): src/server/go.mod
+# carries a `replace` for every sibling module it needs, so the image build
+# does not depend on go.work at all. go.work is a developer-workspace
+# convenience that also lists test/tool modules the binary never needs — a
+# previous version of this file broke every time a module was added there.
+# The .dockerignore keeps host artifacts (node_modules, .next, docs, app/)
+# out of the build context.
+ENV GOWORK=off
 COPY pkg     pkg
 COPY src     src
 COPY sdk     sdk
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    cd src/server && go mod download
 
 # Compile with sendgrid + twilio so real senders are linked. CGO disabled so
 # we get a fully static binary that distroless can run.
