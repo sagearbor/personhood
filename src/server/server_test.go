@@ -478,13 +478,19 @@ func TestIntegration_HealthAndMethods(t *testing.T) {
 	base, _, _, _, cleanup := newTestServer(t)
 	defer cleanup()
 
-	resp, err := http.Get(base + "/healthz")
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("healthz: %v %d", err, resp.StatusCode)
+	// Both spellings must answer: Cloud Run's frontend swallows /healthz on
+	// *.run.app, so deployments there probe the /health alias instead.
+	for _, path := range []string{"/healthz", "/health"} {
+		var got map[string]any
+		if code := mustGET(t, base+path, &got); code != http.StatusOK {
+			t.Fatalf("GET %s -> %d, want 200", path, code)
+		}
+		if got["status"] != "ok" {
+			t.Errorf("GET %s returned %v, want {\"status\":\"ok\"}", path, got)
+		}
 	}
-	resp.Body.Close()
 
-	resp, err = http.Get(base + "/v1/methods")
+	resp, err := http.Get(base + "/v1/methods")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("methods: %v %d", err, resp.StatusCode)
 	}

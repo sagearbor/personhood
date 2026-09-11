@@ -43,6 +43,7 @@ All requests/responses are JSON unless noted.
 | Method | Path | Purpose |
 |---|---|---|
 | GET  | `/healthz` | Liveness probe; returns `{"status":"ok"}`. |
+| GET  | `/health` | Alias of `/healthz`, same handler. Cloud Run's frontend intercepts `/healthz` on `*.run.app` and returns its own 404 before the request reaches the container (every other route gets through), so probes on Cloud Run must use `/health`. |
 | GET  | `/.well-known/did.json` | Issuer DID document (Ed25519 public key as a JWK). |
 | GET  | `/v1/config` | Public, unauthenticated deployment description: `{invite_code_required, challenge_secrets_exposed, email_delivery}`. Clients read it before `/enrollment/start` to decide whether to prompt for an invite code, and to warn the user when magic links are being returned over the wire rather than emailed. Never contains the invite code itself. |
 | GET  | `/v1/methods` | List the registered methods (id, type, strength, friction, version). |
