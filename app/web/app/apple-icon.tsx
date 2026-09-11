@@ -1,6 +1,10 @@
 import { ImageResponse } from 'next/og';
 
-export const runtime = 'edge';
+// See app/icon.tsx for why this is `dynamic = 'force-static'` rather than
+// `runtime = 'edge'`: under static export there's no edge runtime, and
+// `edge` was silently disabling static generation for this route (no
+// apple-icon.png ever landed in out/).
+export const dynamic = 'force-static';
 export const size = { width: 180, height: 180 };
 export const contentType = 'image/png';
 

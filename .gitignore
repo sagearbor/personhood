@@ -11,6 +11,12 @@ target/
 .nuxt/
 *.tsbuildinfo
 
+# app/web's static export (output: 'export' in app/web/next.config.mjs),
+# deployed to Firebase Hosting via `firebase deploy --only hosting:web` —
+# already covered by the bare `out/` rule above, named explicitly since this
+# is the directory firebase.json's hosting.public points at.
+app/web/out/
+
 # Go test/build artifacts
 *.test
 *.out

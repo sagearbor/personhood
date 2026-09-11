@@ -11,7 +11,15 @@
 // v0.1 since Next.js handles its own immutable hashed bundles.
 
 const CACHE_NAME = 'personhood-shell-v1';
-const SHELL = ['/', '/offline'];
+// Only precache paths that actually exist in the exported output (see
+// app/web/app/ — there is no /offline route, static or otherwise; an
+// earlier version of this list included one, which would make
+// cache.addAll() below reject for the whole batch since it fails atomically
+// on any 404). The catch(() => {}) already made that failure non-fatal, but
+// it silently meant '/' itself was never precached either — listing only
+// real paths fixes that for real, on both Vercel and the static
+// (`output: 'export'`) Firebase Hosting build.
+const SHELL = ['/'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

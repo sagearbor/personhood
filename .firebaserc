@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "arborfam-hub"
+  },
+  "targets": {
+    "arborfam-hub": {
+      "hosting": {
+        "web": ["personhood-web"]
+      }
+    }
+  }
+}
