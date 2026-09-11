@@ -203,6 +203,113 @@ func TestMethod_CompleteCeremony_MissingSessionID(t *testing.T) {
 	}
 }
 
+// --- candidate identity key: holder DID (PR #35) over SessionID ------------
+
+func TestMethod_BeginCeremony_PrefersHolderDIDOverSessionID(t *testing.T) {
+	t.Parallel()
+	m := newTestMethod(nil)
+	challenge, err := m.BeginCeremony(context.Background(), types.CeremonyContext{
+		SessionID: "sess-1",
+		HolderDID: "did:key:z6MkExampleHolder",
+	})
+	if err != nil {
+		t.Fatalf("BeginCeremony: %v", err)
+	}
+	if challenge.Payload["candidate_code"] != "did:key:z6MkExampleHolder" {
+		t.Fatalf("candidate_code = %v, want the holder DID, not the SessionID", challenge.Payload["candidate_code"])
+	}
+}
+
+func TestMethod_BeginCeremony_FallsBackToSessionIDWithNoHolderDID(t *testing.T) {
+	t.Parallel()
+	m := newTestMethod(nil)
+	challenge, err := m.BeginCeremony(context.Background(), types.CeremonyContext{SessionID: "sess-1"})
+	if err != nil {
+		t.Fatalf("BeginCeremony: %v", err)
+	}
+	if challenge.Payload["candidate_code"] != "sess-1" {
+		t.Fatalf("candidate_code = %v, want sess-1 (fallback)", challenge.Payload["candidate_code"])
+	}
+}
+
+func TestMethod_CompleteCeremony_EnrollsUnderHolderDID(t *testing.T) {
+	t.Parallel()
+	m := newTestMethod(map[string]float64{"seed-1": 1.0, "seed-2": 1.0, "seed-3": 1.0})
+	const holderDID = "did:key:z6MkCandidateHolder"
+	recordVouch(t, m, holderDID, "seed-1")
+	recordVouch(t, m, holderDID, "seed-2")
+	recordVouch(t, m, holderDID, "seed-3")
+
+	result, err := m.CompleteCeremony(context.Background(), types.CeremonyContext{
+		SessionID: "sess-1",
+		HolderDID: holderDID,
+	}, types.ResponseData{})
+	if err != nil {
+		t.Fatalf("CompleteCeremony: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("CompleteCeremony: Success = false, ErrorReason = %q", result.ErrorReason)
+	}
+
+	// Enrolled under the holder DID, NOT the SessionID.
+	if _, known, _ := m.store.TrustOf(context.Background(), holderDID); !known {
+		t.Fatal("candidate was not enrolled under its holder DID")
+	}
+	if _, known, _ := m.store.TrustOf(context.Background(), "sess-1"); known {
+		t.Fatal("candidate should not also be enrolled under its bare SessionID")
+	}
+}
+
+// TestMethod_CandidateIdentity_SurvivesReEnrollment proves the actual point
+// of keying by holder DID instead of SessionID: a candidate who accumulates
+// vouches, then re-enrolls (a NEW SessionID, e.g. after restarting the app —
+// see app/web/page.tsx's restart(), which reuses the SAME persisted holder
+// keypair) does not lose those vouches, and a graduate can vouch for someone
+// else from a later, separate session using the identity their own
+// enrollment established.
+func TestMethod_CandidateIdentity_SurvivesReEnrollment(t *testing.T) {
+	t.Parallel()
+	m := NewMethod(Config{
+		Store:           NewInMemoryGraphStore(map[string]float64{"seed-1": 1.0, "seed-2": 1.0}),
+		Authenticator:   NewHMACDevAuthenticator(testSecret),
+		RequiredVouches: 2,
+		RequiredScore:   1.5,
+	})
+	const graduateDID = "did:key:z6MkGraduateHolder"
+
+	// First enrollment session: sess-A, holder graduateDID.
+	recordVouch(t, m, graduateDID, "seed-1")
+	recordVouch(t, m, graduateDID, "seed-2")
+	resultA, err := m.CompleteCeremony(context.Background(), types.CeremonyContext{
+		SessionID: "sess-A",
+		HolderDID: graduateDID,
+	}, types.ResponseData{})
+	if err != nil {
+		t.Fatalf("CompleteCeremony A: %v", err)
+	}
+	if !resultA.Success {
+		t.Fatalf("CompleteCeremony A: Success = false, ErrorReason = %q", resultA.ErrorReason)
+	}
+
+	// The SAME holder restarts the app and gets a brand-new SessionID
+	// (sess-B, below) — but the same persisted holder keypair, so the same
+	// holder DID. They should still be able to vouch for someone else using
+	// that stable identity, proving the graph didn't lose them.
+	const candidateDID = "did:key:z6MkNewCandidateHolder"
+	recordVouch(t, m, candidateDID, graduateDID) // the graduate vouches, keyed by their stable DID
+	recordVouch(t, m, candidateDID, "seed-1")
+	resultB, err := m.CompleteCeremony(context.Background(), types.CeremonyContext{
+		SessionID: "sess-B",
+		HolderDID: candidateDID,
+	}, types.ResponseData{})
+	if err != nil {
+		t.Fatalf("CompleteCeremony B: %v", err)
+	}
+	if !resultB.Success {
+		t.Fatalf("CompleteCeremony B: Success = false, ErrorReason = %q", resultB.ErrorReason)
+	}
+}
+
 func TestMethod_HealthCheck(t *testing.T) {
 	t.Parallel()
 	m := newTestMethod(nil)

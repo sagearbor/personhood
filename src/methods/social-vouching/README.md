@@ -31,9 +31,11 @@ supplementary, never naive stacking" design constraint (see `CLAUDE.md`).
 
 ## Flow (candidate code → out-of-band vouches → threshold check)
 
-1. **BeginCeremony** returns a `candidate_code` (v0.1: the ceremony's own
-   `SessionID` — see the scope note below), the out-of-band `vouch_endpoint`
-   an existing member POSTs a vouch to, and the configured thresholds.
+1. **BeginCeremony** returns a `candidate_code` — the candidate's stable
+   holder `did:key` (see "Candidate identity" below) when the session was
+   started with a holder public key, falling back to the ceremony's own
+   `SessionID` otherwise — the out-of-band `vouch_endpoint` an existing
+   member POSTs a vouch to, and the configured thresholds.
 2. The candidate shares `candidate_code` with an existing vouched member
    (in person, over a call, however the two humans coordinate — this is the
    "high friction" the catalog flags).
@@ -117,18 +119,37 @@ shared secret; `SOCIAL_VOUCHING_SEED_IDS` is a comma-separated bootstrap
 seed list (each seeded at trust 1.0) — see `src/server/server.go` and
 `RUNBOOK.md`.
 
+## Candidate identity: holder `did:key`, not the enrollment `SessionID`
+
+`method.go`'s `candidateKey(cc)` is what `BeginCeremony`, `CompleteCeremony`,
+and the eventual `GraphStore.Enroll` call all key off of: `cc.HolderDID`
+(the stable `did:key` holder DID a session gets when the client supplied an
+Ed25519 public key at `/enrollment/start` — see `src/server/did.go`'s
+`HolderDIDForSession`, introduced in PR #35) when the `CeremonyContext`
+carries one, falling back to `cc.SessionID` otherwise.
+
+This means: as long as the same client persists and resubmits the same
+holder keypair (which `app/web/lib/holderkey.ts` already does — it
+generates one on first boot and reuses it on every subsequent
+`/enrollment/start`, including after "Start over"), the SAME holder always
+resolves to the SAME graph identity across SEPARATE enrollment sessions. A
+graduate who vouches for someone else in a later session, or a candidate who
+re-enrolls after an interrupted ceremony, keeps their accumulated trust and
+vouches instead of losing them to a fresh, unrelated `SessionID` — the exact
+limitation the previous (v0.1) `SessionID`-only design had (see prior
+revisions of this file / the round-4 session's wrapup for the historical
+scope note).
+
+The `SessionID` fallback is intentionally kept for two cases: (1) a session
+started without `holder_public_key_b64` (the round-1 email-only flow, or any
+browser without WebCrypto Ed25519 support), which still gets an
+internally-consistent identity key for that one ceremony's lifetime, same as
+before; (2) any `CeremonyContext` a caller (typically a test) constructs
+directly without going through the server's own handlers, where `HolderDID`
+is simply never set.
+
 ## v0.1 scope notes
 
-- **Candidate identity key is the enrollment `SessionID`**, not a stable
-  long-term DID. This is internally consistent for the lifetime of one
-  server process (every vouch and the eventual `Enroll` call key off the
-  same `SessionID`), matching every other `InMemory*` store's process
-  lifetime limitation, but means a candidate who wants to vouch for someone
-  else in a LATER, separate enrollment session needs their original
-  `SessionID` threaded through — not their holder DID. Wiring
-  `CeremonyContext` (or a server-side lookup) to carry the holder DID once
-  established would let a future session key the graph by DID instead;
-  flagged as a follow-up, not done here (see this session's wrapup).
 - **No real graph analysis (SybilRank's random walks) — a simplified
   weighted-sum-with-decay approximation.** True SybilRank runs bounded
   random walks from trusted seeds and ranks nodes by landing probability;

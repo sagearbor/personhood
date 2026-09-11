@@ -133,9 +133,9 @@ func (m *Method) IsAvailableForUser(_ types.UserContext) (bool, string) {
 }
 
 // BeginCeremony implements registry.Method. It returns the candidate's
-// vouch code (v0.1: the ceremony's own SessionID — see the package doc
-// comment's scope note) and the out-of-band vouch endpoint an existing
-// member POSTs a vouch to.
+// vouch code — the candidate's stable holder DID when available (see
+// candidateKey), falling back to the ceremony's own SessionID otherwise —
+// and the out-of-band vouch endpoint an existing member POSTs a vouch to.
 func (m *Method) BeginCeremony(_ context.Context, cc types.CeremonyContext) (types.ChallengeData, error) {
 	if cc.SessionID == "" {
 		return types.ChallengeData{}, errors.New("social-vouching: CeremonyContext.SessionID is required")
@@ -143,7 +143,7 @@ func (m *Method) BeginCeremony(_ context.Context, cc types.CeremonyContext) (typ
 	return types.ChallengeData{
 		Type: "social-vouching-challenge",
 		Payload: map[string]any{
-			"candidate_code":    cc.SessionID,
+			"candidate_code":    candidateKey(cc),
 			"vouch_endpoint":    "/v1/methods/" + MethodID + "/vouch",
 			"complete_endpoint": "/v1/methods/" + MethodID + "/complete",
 			"required_vouches":  m.requiredVouches,
@@ -165,8 +165,9 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 	if cc.SessionID == "" {
 		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: "missing_session_id"}, nil
 	}
+	candidate := candidateKey(cc)
 
-	vouches, err := m.store.VouchesFor(ctx, cc.SessionID)
+	vouches, err := m.store.VouchesFor(ctx, candidate)
 	if err != nil {
 		return types.MethodResult{}, fmt.Errorf("social-vouching: vouches lookup: %w", err)
 	}
@@ -190,7 +191,7 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 	if candidateTrust > 1.0 {
 		candidateTrust = 1.0
 	}
-	if err := m.store.Enroll(ctx, cc.SessionID, candidateTrust); err != nil {
+	if err := m.store.Enroll(ctx, candidate, candidateTrust); err != nil {
 		return types.MethodResult{}, fmt.Errorf("social-vouching: enroll: %w", err)
 	}
 
@@ -199,10 +200,43 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 		Success:           true,
 		MethodID:          MethodID,
 		VerifiedAt:        now,
-		AttestationDigest: vouchDigest(cc.SessionID, vouches),
+		AttestationDigest: vouchDigest(candidate, vouches),
 	}, nil
 }
 
 // HealthCheck implements registry.Method. No external dependency to probe;
 // the in-memory graph store is local. v0.1 is a no-op success.
 func (m *Method) HealthCheck(_ context.Context) error { return nil }
+
+// candidateKey returns the identity key this method uses to track a
+// candidate/graduate in the GraphStore: cc.HolderDID (the stable did:key
+// holder DID introduced in PR #35 — see src/server/did.go
+// HolderDIDForSession) when the CeremonyContext carries one, falling back
+// to cc.SessionID otherwise.
+//
+// This replaces v0.1's original "always key by SessionID" design (see the
+// package doc's history): a bare SessionID only exists for the lifetime of
+// one enrollment ceremony, so a candidate who later wanted to vouch for
+// someone else in a SEPARATE session had no stable identity to present as
+// voucher_id, and a candidate who re-enrolled would lose any vouches
+// accumulated under their old SessionID. Keying by holder DID instead means
+// the same holder keypair always resolves to the same graph identity across
+// separate sessions — as long as the client persists and resubmits the same
+// Ed25519 public key each time (see app/web/lib/holderkey.ts), which is
+// exactly what the web app already does.
+//
+// The SessionID fallback is intentionally kept, not removed: a
+// CeremonyContext with no HolderDID (e.g. a session started without
+// holder_public_key_b64 — the round-1 email-only flow — or any
+// CeremonyContext a test constructs directly without going through the
+// server's handlers) still gets an internally-consistent identity key for
+// that ceremony's own lifetime, matching the old behavior exactly. It is
+// just no longer stable across separate sessions, which is the same
+// limitation every other placeholder-DID-derived identity in this repo
+// already has (see HolderDIDForSession's doc comment).
+func candidateKey(cc types.CeremonyContext) string {
+	if cc.HolderDID != "" {
+		return string(cc.HolderDID)
+	}
+	return cc.SessionID
+}

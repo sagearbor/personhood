@@ -221,9 +221,20 @@ func TestE2E_AirdropTestAnchors(t *testing.T) {
 	t.Run("social-vouching-graph alone does not satisfy anchor_required", func(t *testing.T) {
 		var start struct {
 			SessionID string `json:"session_id"`
+			HolderDID string `json:"holder_did"`
 		}
 		postJSON(t, base+"/enrollment/start", map[string]any{}, &start)
-		candidateID := start.SessionID
+		// candidateID is the session's holder DID (PR #35's did:key when a
+		// holder_public_key_b64 was supplied, or the v0.1 placeholder
+		// did:personhood:holder:<sha256> otherwise — this session posts
+		// neither, so it gets the placeholder) — NOT the bare SessionID.
+		// social-vouching-graph's candidate identity key is cc.HolderDID
+		// (see src/methods/social-vouching/method.go's candidateKey), so
+		// this proves that wiring end to end through the real HTTP API.
+		candidateID := start.HolderDID
+		if candidateID == "" {
+			t.Fatal("enrollment/start did not return a holder_did")
+		}
 
 		var begin struct {
 			Challenge types.ChallengeData `json:"challenge"`
@@ -231,7 +242,7 @@ func TestE2E_AirdropTestAnchors(t *testing.T) {
 		postJSON(t, base+"/v1/methods/social-vouching-graph/begin",
 			map[string]any{"session_id": start.SessionID}, &begin)
 		if begin.Challenge.Payload["candidate_code"] != candidateID {
-			t.Fatalf("candidate_code = %v, want %v", begin.Challenge.Payload["candidate_code"], candidateID)
+			t.Fatalf("candidate_code = %v, want %v (the holder DID, not the SessionID)", begin.Challenge.Payload["candidate_code"], candidateID)
 		}
 
 		for _, voucherID := range []string{"seed-1", "seed-2", "seed-3"} {
@@ -282,9 +293,12 @@ func TestE2E_AirdropTestAnchors(t *testing.T) {
 	t.Run("anchor plus supplementary compose", func(t *testing.T) {
 		var start struct {
 			SessionID string `json:"session_id"`
+			HolderDID string `json:"holder_did"`
 		}
 		postJSON(t, base+"/enrollment/start", map[string]any{}, &start)
-		candidateID := start.SessionID
+		// social-vouching-graph keys the candidate by holder DID (see the
+		// other subtest's comment) — not the bare SessionID.
+		candidateID := start.HolderDID
 
 		var begin struct {
 			Challenge types.ChallengeData `json:"challenge"`

@@ -445,6 +445,17 @@ type CeremonyContext struct {
 	// SessionID is the issuer's session identifier for this ceremony.
 	SessionID string `json:"session_id"`
 
+	// HolderDID is the holder DID this ceremony's session is bound to (see
+	// src/server/did.go's HolderDIDForSession): a real did:key when the
+	// client supplied an Ed25519 public key at /enrollment/start, or the
+	// v0.1 placeholder did:personhood:holder:<sha256(sessionID)> otherwise.
+	// May be empty for CeremonyContexts constructed outside the server's own
+	// handlers (e.g. unit tests) — a method that wants a stable long-term
+	// identity key (rather than the ceremony-local SessionID) should treat
+	// an empty HolderDID as "no stable identity available yet" and fall
+	// back to SessionID, not treat it as an error.
+	HolderDID DID `json:"holder_did,omitempty"`
+
 	// UserID is the issuer-internal user identifier the ceremony attaches to.
 	UserID string `json:"user_id"`
 
