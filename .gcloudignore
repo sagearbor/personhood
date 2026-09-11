@@ -1,0 +1,43 @@
+# Mirror of .dockerignore, for `gcloud run deploy --source .`.
+#
+# gcloud builds the upload context from THIS file (it ignores .dockerignore
+# for that step), then Cloud Build runs the Dockerfile over what was uploaded.
+# So anything excluded here is simply absent during the build — keep this in
+# sync with .dockerignore whenever that file changes.
+#
+# Note: gcloud's default behaviour is to skip files matched by .gitignore.
+# The presence of this file disables that, which is what we want: the
+# Dockerfile is committed, but nothing else here depends on git state.
+#
+# Deliberately NOT excluded — the Dockerfile COPYs pkg/, src/ and sdk/, and
+# Cloud Build needs the Dockerfile itself:
+#   Dockerfile, pkg/, src/, sdk/go/
+.git
+.github
+.claude
+.idea
+.vscode
+.archon
+.cache
+.next
+node_modules
+
+# Web app — not built by this Dockerfile (web is deployed to Vercel).
+app
+sdk/typescript
+
+# Docs and meta — never needed to compile the binary.
+docs
+tmp
+tests
+*.md
+
+# Local secrets — must never leave the workstation.
+.env
+.env.*
+env.example
+.example.env
+
+# OS noise
+.DS_Store
+*.swp

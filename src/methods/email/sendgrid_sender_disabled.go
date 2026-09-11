@@ -31,6 +31,10 @@ func (s *SendGridSender) Send(_ context.Context, _ string, _ string, _ string) e
 	return errSendGridNotBuilt
 }
 
+// Kind implements KindedSender. Present so both build modes expose the same
+// method set; in this build NewSenderFromEnv never returns a SendGridSender.
+func (s *SendGridSender) Kind() string { return SenderKindSendGrid }
+
 // SendGridSenderEnabled reports whether the binary was built with the
 // sendgrid build tag. Always false in this disabled twin.
 func SendGridSenderEnabled() bool { return false }

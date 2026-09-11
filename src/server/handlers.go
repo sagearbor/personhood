@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,15 +20,20 @@ import (
 
 // startEnrollmentRequest is the JSON body of POST /enrollment/start.
 //
-// Both fields are optional. holder_public_key_b64, when supplied, is a
+// Every field is optional. holder_public_key_b64, when supplied, is a
 // 32-byte Ed25519 public key the client generated; it is mixed into the
 // holder DID derivation so the same key always maps to the same DID. user
 // agent / platform / etc. flow through to methods that care.
+//
+// invite_code is required only when the server was configured with
+// Config.EnrollmentInviteCode (env ENROLLMENT_INVITE_CODE); clients discover
+// whether they must ask the user for one from GET /v1/config.
 type startEnrollmentRequest struct {
 	HolderPublicKeyB64 string `json:"holder_public_key_b64,omitempty"`
 	UserAgent          string `json:"user_agent,omitempty"`
 	Platform           string `json:"platform,omitempty"`
 	CountryCode        string `json:"country_code,omitempty"`
+	InviteCode         string `json:"invite_code,omitempty"`
 }
 
 // startEnrollmentResponse is returned by POST /enrollment/start.
@@ -76,6 +82,29 @@ type completeMethodResponse struct {
 	Session SessionView        `json:"session"`
 }
 
+// serverConfigResponse is the JSON body of GET /v1/config — the public,
+// unauthenticated description of how this deployment is configured.
+//
+// It deliberately carries no secrets: only whether a gate exists, not the
+// code that opens it. A client uses it to decide whether to prompt for an
+// invite code before calling /enrollment/start, and to warn the user when
+// magic links are being handed back over the wire instead of emailed.
+type serverConfigResponse struct {
+	// InviteCodeRequired reports whether POST /enrollment/start demands an
+	// invite_code field.
+	InviteCodeRequired bool `json:"invite_code_required"`
+
+	// ChallengeSecretsExposed reports whether POST /v1/methods/{id}/begin
+	// returns secret-bearing challenge fields (the email magic_link_url) to
+	// the caller. True means this deployment is in dev/preview mode and the
+	// email method proves nothing about address ownership.
+	ChallengeSecretsExposed bool `json:"challenge_secrets_exposed"`
+
+	// EmailDelivery names the email backend the server selected at startup:
+	// "log", "smtp", "sendgrid", or "unknown" (a custom/injected Sender).
+	EmailDelivery string `json:"email_delivery"`
+}
+
 // issueCredentialRequest is the JSON body of POST /v1/credentials/issue.
 type issueCredentialRequest struct {
 	SessionID string `json:"session_id"`
@@ -99,10 +128,24 @@ func (s *Server) handleListMethods(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, serverConfigResponse{
+		InviteCodeRequired:      s.cfg.EnrollmentInviteCode != "",
+		ChallengeSecretsExposed: s.cfg.ExposeChallengeSecrets,
+		EmailDelivery:           s.emailDelivery,
+	})
+}
+
 func (s *Server) handleStartEnrollment(w http.ResponseWriter, r *http.Request) {
 	var req startEnrollmentRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	// Invite gate, before any session is allocated. Never log req.InviteCode.
+	if err := s.checkInviteCode(req.InviteCode); err != nil {
+		writeError(w, http.StatusForbidden, err.code, err.message)
 		return
 	}
 
@@ -469,6 +512,41 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// apiError is a machine-readable code plus a human message, in the shape
+// writeError renders. checkInviteCode returns one so the gate's decision can
+// be unit-tested without an http.ResponseWriter.
+type apiError struct {
+	code    string
+	message string
+}
+
+var (
+	errInviteCodeRequired = &apiError{"invite_code_required", "this issuer requires an invite code; pass invite_code in the request body"}
+	errInviteCodeInvalid  = &apiError{"invite_code_invalid", "invite code is not valid"}
+)
+
+// checkInviteCode enforces Config.EnrollmentInviteCode against the supplied
+// code. It returns nil when the server has no gate configured, or when the
+// supplied code matches.
+//
+// The comparison is constant-time so a caller cannot recover the code one
+// byte at a time from response latency. Neither the configured code nor the
+// supplied one is ever written to a log or to the error message.
+func (s *Server) checkInviteCode(supplied string) *apiError {
+	want := s.cfg.EnrollmentInviteCode
+	if want == "" {
+		return nil
+	}
+	got := strings.TrimSpace(supplied)
+	if got == "" {
+		return errInviteCodeRequired
+	}
+	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		return errInviteCodeInvalid
+	}
+	return nil
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

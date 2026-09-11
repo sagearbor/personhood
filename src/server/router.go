@@ -17,6 +17,7 @@ import (
 //
 //	GET  /healthz                              — liveness probe
 //	GET  /.well-known/did.json                 — issuer DID document
+//	GET  /v1/config                            — public deployment config
 //	GET  /v1/methods                           — list registered methods
 //	POST /enrollment/start                     — create a session
 //	GET  /v1/sessions/{sessionId}              — poll session progress
@@ -35,6 +36,10 @@ func (s *Server) Router() http.Handler {
 	r.Get("/.well-known/did.json", s.handleDIDDocument)
 
 	r.Route("/v1", func(r chi.Router) {
+		// Public and unauthenticated, like /v1/methods: it advertises only
+		// which gates exist, never the invite code itself. The web app reads
+		// it before /enrollment/start to decide whether to prompt for a code.
+		r.Get("/config", s.handleConfig)
 		r.Get("/methods", s.handleListMethods)
 		r.Get("/sessions/{sessionId}", s.handleGetSession)
 

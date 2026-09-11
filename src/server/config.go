@@ -69,6 +69,22 @@ type Config struct {
 	// controlled, which makes the method worthless as a signal. Env:
 	// DEV_EXPOSE_CHALLENGE_SECRETS=1.
 	ExposeChallengeSecrets bool
+
+	// EnrollmentInviteCode, when non-empty, gates POST /enrollment/start: a
+	// request must carry a matching invite_code field or it is rejected with
+	// 403. Empty (the default) means no gate — anyone who can reach the
+	// server can open an enrollment session.
+	//
+	// It is a shared secret handed out to a known, small group, NOT an
+	// authentication mechanism: it identifies a cohort, not a person, and it
+	// leaks the moment one holder shares it. Its job is to keep a deployment
+	// that is intentionally running with ExposeChallengeSecrets=1 (magic
+	// links returned to the caller, because no mail credential is wired yet)
+	// from being usable by the entire internet that can reach its public URL.
+	// Rotate it by changing the env var and restarting.
+	//
+	// Env: ENROLLMENT_INVITE_CODE. Never logged; compared in constant time.
+	EnrollmentInviteCode string
 }
 
 // LoadConfigFromEnv reads the canonical environment variables documented in
@@ -85,6 +101,11 @@ type Config struct {
 //   - CORS_ALLOWED_ORIGINS         default "http://localhost:3000"
 //   - SESSION_TTL_MINUTES          default 60
 //   - DEV_EXPOSE_CHALLENGE_SECRETS default off (dev/test only — see Config)
+//   - ENROLLMENT_INVITE_CODE       default empty (no invite gate). When set,
+//     POST /enrollment/start requires a matching invite_code in the request
+//     body; GET /v1/config advertises that the gate is on (but never the
+//     code). Pair it with DEV_EXPOSE_CHALLENGE_SECRETS on any deployment
+//     that has a public URL but no mail credential yet.
 func LoadConfigFromEnv() (Config, error) {
 	cfg := Config{
 		Addr:                   firstNonEmpty(os.Getenv("SERVER_ADDR"), ":8080"),
@@ -92,6 +113,7 @@ func LoadConfigFromEnv() (Config, error) {
 		CORSAllowedOrigins:     splitCSV(firstNonEmpty(os.Getenv("CORS_ALLOWED_ORIGINS"), "http://localhost:3000")),
 		SessionTTL:             60 * time.Minute,
 		ExposeChallengeSecrets: envBool(os.Getenv("DEV_EXPOSE_CHALLENGE_SECRETS")),
+		EnrollmentInviteCode:   strings.TrimSpace(os.Getenv("ENROLLMENT_INVITE_CODE")),
 	}
 
 	if m := os.Getenv("SESSION_TTL_MINUTES"); m != "" {
