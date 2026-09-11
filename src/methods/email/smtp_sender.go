@@ -183,6 +183,9 @@ func smtpMessage(from, fromName, to, subject, magicLinkURL string) []byte {
 	return []byte(b.String())
 }
 
+// Kind implements KindedSender.
+func (s *SMTPSender) Kind() string { return SenderKindSMTP }
+
 // smtpSenderFromEnv inspects SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/
 // SMTP_FROM and returns a configured SMTPSender, or nil if SMTP_HOST or
 // SMTP_FROM is unset. Consumed by NewSenderFromEnv (factory.go) as the

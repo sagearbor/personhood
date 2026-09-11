@@ -39,3 +39,40 @@ func (s *LogSender) Send(_ context.Context, to string, subject string, magicLink
 	logger.Printf("[email/LogSender] to=%s subject=%q link=%s", to, subject, magicLinkURL)
 	return nil
 }
+
+// SenderKindLog / SenderKindSMTP / SenderKindSendGrid are the stable string
+// identifiers a Sender reports through Kind. They are part of the issuer's
+// public wire contract: the reference server surfaces the selected kind on
+// GET /v1/config so a client can tell whether real mail is being delivered or
+// magic links are only being written to the server log.
+const (
+	SenderKindLog      = "log"
+	SenderKindSMTP     = "smtp"
+	SenderKindSendGrid = "sendgrid"
+	SenderKindUnknown  = "unknown"
+)
+
+// KindedSender is the optional interface a Sender may implement to report
+// which delivery backend it is. Every Sender in this package implements it;
+// third-party and test Senders need not.
+type KindedSender interface {
+	// Kind returns one of the SenderKind* constants.
+	Kind() string
+}
+
+// SenderKind reports which delivery backend s is, via the optional
+// KindedSender interface. A nil Sender, or one that does not implement Kind,
+// reports SenderKindUnknown.
+//
+// It reads no credentials: the answer comes from the constructed Sender
+// itself, so it stays correct under every build-tag / env-var combination
+// NewSenderFromEnv can resolve.
+func SenderKind(s Sender) string {
+	if k, ok := s.(KindedSender); ok {
+		return k.Kind()
+	}
+	return SenderKindUnknown
+}
+
+// Kind implements KindedSender.
+func (s *LogSender) Kind() string { return SenderKindLog }

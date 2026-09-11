@@ -19,6 +19,9 @@ import (
 // If SENDGRID_API_KEY is set but the sendgrid tag is missing — or vice versa
 // — NewSenderFromEnv logs a warning before falling through to SMTP/LogSender,
 // so the failure is obvious rather than silent.
+//
+// Pass the result to SenderKind to learn which tier was selected without
+// re-deriving the decision from env vars.
 func NewSenderFromEnv() Sender {
 	if s := realSenderFromEnv(); s != nil {
 		return s

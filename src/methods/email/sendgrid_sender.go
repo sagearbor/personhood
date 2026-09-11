@@ -159,6 +159,9 @@ func realSenderFromEnv() Sender {
 	return s
 }
 
+// Kind implements KindedSender.
+func (s *SendGridSender) Kind() string { return SenderKindSendGrid }
+
 // ---------------------------------------------------------------------------
 // SendGrid wire types (kept package-private; not part of the public API)
 // ---------------------------------------------------------------------------

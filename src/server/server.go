@@ -56,6 +56,12 @@ type Server struct {
 	// in Router().
 	methodRoutes []methodRoute
 
+	// emailDelivery names the email backend the registered `email` method
+	// sends through — one of email.SenderKind* ("log", "smtp", "sendgrid",
+	// "unknown"). Reported by GET /v1/config so an operator (or the web app)
+	// can see at a glance whether real mail is leaving the box.
+	emailDelivery string
+
 	// nowFunc is overridden in tests to make ceremony timestamps deterministic.
 	// Default is time.Now.UTC.
 	nowFunc func() time.Time
@@ -85,6 +91,13 @@ type Dependencies struct {
 	// (e.g. Persona's webhook receiver). Empty for a registry that only
 	// holds email + sms.
 	MethodRoutes []methodRoute
+
+	// EmailSenderKind names the email delivery backend the Registry's email
+	// method was built with — one of the email.SenderKind* constants.
+	// BuildDependencies fills it in from the Sender it actually constructed.
+	// Empty (the default, e.g. when a test injects its own Sender) is
+	// reported as email.SenderKindUnknown on GET /v1/config.
+	EmailSenderKind string
 }
 
 // NewServer constructs a Server from cfg and deps. It returns an error if cfg
@@ -122,8 +135,14 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		return nil, fmt.Errorf("server: session store: %w", err)
 	}
 
+	emailDelivery := deps.EmailSenderKind
+	if emailDelivery == "" {
+		emailDelivery = emailmethod.SenderKindUnknown
+	}
+
 	return &Server{
 		cfg:                cfg,
+		emailDelivery:      emailDelivery,
 		issuerDID:          issuerDID,
 		issuerVMethodID:    vMethod,
 		issuerPublicKey:    pub,
@@ -183,6 +202,15 @@ func (s *Server) SetCredentialLifetime(d time.Duration) {
 // any extra anchor methods (e.g. government-id-liveness — see
 // BuildDependencies).
 func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
+	reg, _, err := defaultMethods(magicLinkBaseURL)
+	return reg, err
+}
+
+// defaultMethods is DefaultMethods plus the one extra fact BuildDependencies
+// needs: which email Sender the env-aware factory actually picked. Returned
+// separately rather than calling NewSenderFromEnv a second time, so the
+// reported kind can never disagree with the Sender in the registry.
+func defaultMethods(magicLinkBaseURL string) (*registry.Registry, string, error) {
 	reg := registry.New()
 
 	// Sender selection is delegated to the method packages' env-aware
@@ -193,29 +221,30 @@ func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
 	// an in-memory one (the default) otherwise.
 	emailStore, err := emailmethod.NewTokenStoreFromEnv()
 	if err != nil {
-		return nil, fmt.Errorf("email: token store: %w", err)
+		return nil, "", fmt.Errorf("email: token store: %w", err)
 	}
+	emailSender := emailmethod.NewSenderFromEnv()
 	emailMethod := emailmethod.NewMethod(
-		emailmethod.NewSenderFromEnv(),
+		emailSender,
 		magicLinkBaseURL,
 		emailStore,
 	)
 	if err := reg.Register(emailMethod); err != nil {
-		return nil, fmt.Errorf("register email: %w", err)
+		return nil, "", fmt.Errorf("register email: %w", err)
 	}
 
 	smsStore, err := smsmethod.NewOTPStoreFromEnv()
 	if err != nil {
-		return nil, fmt.Errorf("sms: otp store: %w", err)
+		return nil, "", fmt.Errorf("sms: otp store: %w", err)
 	}
 	smsMethodPlugin := smsmethod.NewMethod(
 		smsmethod.NewSenderFromEnv(),
 		smsStore,
 	)
 	if err := reg.Register(smsMethodPlugin); err != nil {
-		return nil, fmt.Errorf("register sms: %w", err)
+		return nil, "", fmt.Errorf("register sms: %w", err)
 	}
-	return reg, nil
+	return reg, emailmethod.SenderKind(emailSender), nil
 }
 
 // BuildDependencies assembles the full Dependencies struct for a v0.1
@@ -233,11 +262,11 @@ func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
 // redirect-uri so the user lands back on the web app after completing
 // verification. Pass "" to omit.
 func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error) {
-	reg, err := DefaultMethods(magicLinkBaseURL)
+	reg, emailSenderKind, err := defaultMethods(magicLinkBaseURL)
 	if err != nil {
 		return Dependencies{}, err
 	}
-	deps := Dependencies{Registry: reg}
+	deps := Dependencies{Registry: reg, EmailSenderKind: emailSenderKind}
 
 	apiKey := os.Getenv("PERSONA_API_KEY")
 	templateID := os.Getenv("PERSONA_TEMPLATE_ID")

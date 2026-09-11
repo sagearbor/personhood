@@ -43,9 +43,11 @@ All requests/responses are JSON unless noted.
 | Method | Path | Purpose |
 |---|---|---|
 | GET  | `/healthz` | Liveness probe; returns `{"status":"ok"}`. |
+| GET  | `/health` | Alias of `/healthz`, same handler. Cloud Run's frontend intercepts `/healthz` on `*.run.app` and returns its own 404 before the request reaches the container (every other route gets through), so probes on Cloud Run must use `/health`. |
 | GET  | `/.well-known/did.json` | Issuer DID document (Ed25519 public key as a JWK). |
+| GET  | `/v1/config` | Public, unauthenticated deployment description: `{invite_code_required, challenge_secrets_exposed, email_delivery}`. Clients read it before `/enrollment/start` to decide whether to prompt for an invite code, and to warn the user when magic links are being returned over the wire rather than emailed. Never contains the invite code itself. |
 | GET  | `/v1/methods` | List the registered methods (id, type, strength, friction, version). |
-| POST | `/enrollment/start` | Create a session. Returns `{session_id, holder_did, issuer_did, expires_at, available_methods}`. |
+| POST | `/enrollment/start` | Create a session. Returns `{session_id, holder_did, issuer_did, expires_at, available_methods}`. Requires `invite_code` in the body when `ENROLLMENT_INVITE_CODE` is set — `403 invite_code_required` if absent, `403 invite_code_invalid` if wrong. |
 | GET  | `/v1/sessions/{sessionId}` | Poll a session's progress (`verified_methods`, `anchor_method_id`, `issued_credential_id`). The web app polls this to notice the magic link was clicked in another tab/device. |
 | POST | `/v1/methods/{methodId}/begin` | Body: `{session_id, user_input}`. Returns the method's `ChallengeData` with secret fields (`magic_link_url`) redacted unless `DEV_EXPOSE_CHALLENGE_SECRETS=1`. |
 | POST | `/v1/methods/{methodId}/complete` | Body: `{session_id, response}`. Records the result on the session and returns `{result, session}`. |
@@ -74,6 +76,20 @@ itself only reads:
 | `SERVER_PUBLIC_URL` | no | `http://localhost:8080` | Used to construct magic-link URLs, the issuer DID, and the status list URL. |
 | `CORS_ALLOWED_ORIGINS` | no | `http://localhost:3000` | Comma-separated browser origin allowlist. |
 | `SESSION_TTL_MINUTES` | no | `60` | How long a session can sit between `start` and `issue`. |
+| `DEV_EXPOSE_CHALLENGE_SECRETS` | no | off | Dev/test only. `1` makes `/v1/methods/{id}/begin` return the email `magic_link_url` to the caller, so a script (or a friend with no inbox access) can "click" the link. With it on, the email method proves nothing about address ownership. |
+| `ENROLLMENT_INVITE_CODE` | no | — (no gate) | Shared invite code required in the `invite_code` field of `POST /enrollment/start`. Compared in constant time after trimming whitespace; never logged and never returned by `/v1/config`. |
+
+### Preview deployments
+
+A deployment with a public URL but no mail credential yet has to run with
+`DEV_EXPOSE_CHALLENGE_SECRETS=1` so testers can see their own magic link. That
+alone would let anyone on the internet mint a credential against any email
+address. Set `ENROLLMENT_INVITE_CODE` at the same time: it is a cohort secret
+(not authentication — it identifies "someone who was given the code", and it
+leaks as soon as one holder shares it), but it keeps the front door shut
+against drive-by traffic and scanners while the deployment is in this state.
+`GET /v1/config` reports `challenge_secrets_exposed: true` so the web app can
+show the user what mode they are in.
 
 ## v0.1 quirks worth knowing
 

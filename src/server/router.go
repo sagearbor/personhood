@@ -15,8 +15,9 @@ import (
 //
 // Route map (kept in sync with README.md):
 //
-//	GET  /healthz                              — liveness probe
+//	GET  /healthz  (and /health alias)         — liveness probe
 //	GET  /.well-known/did.json                 — issuer DID document
+//	GET  /v1/config                            — public deployment config
 //	GET  /v1/methods                           — list registered methods
 //	POST /enrollment/start                     — create a session
 //	GET  /v1/sessions/{sessionId}              — poll session progress
@@ -32,9 +33,17 @@ func (s *Server) Router() http.Handler {
 	r.Use(recoverer)
 
 	r.Get("/healthz", s.handleHealth)
+	// /health is an alias: Google's frontend intercepts /healthz on *.run.app
+	// and answers its own 404 before the request reaches the container (every
+	// other route gets through), so Cloud Run deployments must probe /health.
+	r.Get("/health", s.handleHealth)
 	r.Get("/.well-known/did.json", s.handleDIDDocument)
 
 	r.Route("/v1", func(r chi.Router) {
+		// Public and unauthenticated, like /v1/methods: it advertises only
+		// which gates exist, never the invite code itself. The web app reads
+		// it before /enrollment/start to decide whether to prompt for a code.
+		r.Get("/config", s.handleConfig)
 		r.Get("/methods", s.handleListMethods)
 		r.Get("/sessions/{sessionId}", s.handleGetSession)
 

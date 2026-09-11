@@ -82,6 +82,13 @@ func newTestServer(t *testing.T) (string, *Server, *recordingEmailSender, *recor
 // the server is constructed (e.g. to flip ExposeChallengeSecrets).
 func newTestServerWith(t *testing.T, mutate func(*Config)) (string, *Server, *recordingEmailSender, *recordingSMSSender, func()) {
 	t.Helper()
+	return newTestServerWithDeps(t, mutate, nil)
+}
+
+// newTestServerWithDeps is newTestServerWith plus a hook to adjust the
+// Dependencies before NewServer is called (e.g. to set EmailSenderKind).
+func newTestServerWithDeps(t *testing.T, mutate func(*Config), mutateDeps func(*Dependencies)) (string, *Server, *recordingEmailSender, *recordingSMSSender, func()) {
+	t.Helper()
 
 	emailSender := &recordingEmailSender{}
 	smsSender := &recordingSMSSender{}
@@ -127,7 +134,11 @@ func newTestServerWith(t *testing.T, mutate func(*Config)) (string, *Server, *re
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	srv, err := NewServer(cfg, Dependencies{Registry: reg})
+	deps := Dependencies{Registry: reg}
+	if mutateDeps != nil {
+		mutateDeps(&deps)
+	}
+	srv, err := NewServer(cfg, deps)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -467,13 +478,19 @@ func TestIntegration_HealthAndMethods(t *testing.T) {
 	base, _, _, _, cleanup := newTestServer(t)
 	defer cleanup()
 
-	resp, err := http.Get(base + "/healthz")
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("healthz: %v %d", err, resp.StatusCode)
+	// Both spellings must answer: Cloud Run's frontend swallows /healthz on
+	// *.run.app, so deployments there probe the /health alias instead.
+	for _, path := range []string{"/healthz", "/health"} {
+		var got map[string]any
+		if code := mustGET(t, base+path, &got); code != http.StatusOK {
+			t.Fatalf("GET %s -> %d, want 200", path, code)
+		}
+		if got["status"] != "ok" {
+			t.Errorf("GET %s returned %v, want {\"status\":\"ok\"}", path, got)
+		}
 	}
-	resp.Body.Close()
 
-	resp, err = http.Get(base + "/v1/methods")
+	resp, err := http.Get(base + "/v1/methods")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("methods: %v %d", err, resp.StatusCode)
 	}
