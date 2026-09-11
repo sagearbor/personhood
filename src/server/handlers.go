@@ -158,6 +158,7 @@ func (s *Server) handleBeginMethod(w http.ResponseWriter, r *http.Request) {
 
 	cc := types.CeremonyContext{
 		SessionID: sess.ID,
+		HolderDID: sess.HolderDID,
 		UserID:    req.UserInput, // v0.1 hand-off — see email.go / sms.go
 		MethodID:  methodID,
 		IssuerDID: s.issuerDID,
@@ -237,6 +238,7 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 
 	cc := types.CeremonyContext{
 		SessionID: sess.ID,
+		HolderDID: sess.HolderDID,
 		MethodID:  methodID,
 		IssuerDID: s.issuerDID,
 		StartedAt: sess.CreatedAt,
@@ -294,6 +296,7 @@ func (s *Server) handleEmailMagicLink(w http.ResponseWriter, r *http.Request) {
 
 	cc := types.CeremonyContext{
 		SessionID: sess.ID,
+		HolderDID: sess.HolderDID,
 		MethodID:  methodID,
 		IssuerDID: s.issuerDID,
 		StartedAt: sess.CreatedAt,
