@@ -3,46 +3,89 @@
 import { useEffect, useState } from 'react';
 import { Brand } from '@/components/Brand';
 import { Progress, type StepId } from '@/components/Progress';
+import { InviteGate } from '@/components/InviteGate';
 import { EmailStep } from '@/components/steps/EmailStep';
 import { SmsStep } from '@/components/steps/SmsStep';
 import { IdStep } from '@/components/steps/IdStep';
 import { SelfieStep } from '@/components/steps/SelfieStep';
 import { CredentialStep } from '@/components/steps/CredentialStep';
-import { startEnrollment, type StartEnrollmentResponse, type Credential, SERVER_URL } from '@/lib/api';
+import {
+  startEnrollment,
+  getConfig,
+  ApiError,
+  type StartEnrollmentResponse,
+  type ConfigResponse,
+  type Credential,
+  SERVER_URL,
+} from '@/lib/api';
 import { selectEmailMethod, selectSmsMethod } from '@/lib/tiering';
 import { getOrCreateHolderKeyPair } from '@/lib/holderkey';
+import { readSavedInviteCode, saveInviteCode, inviteErrorMessage } from '@/lib/inviteCode';
 
 export default function Page() {
   const [session, setSession] = useState<StartEnrollmentResponse | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [config, setConfig] = useState<ConfigResponse | null>(null);
+  const [inviteCode, setInviteCode] = useState('');
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   const [step, setStep] = useState<StepId>('email');
   const [completed, setCompleted] = useState<Set<StepId>>(new Set());
   const [skipped, setSkipped] = useState<Set<StepId>>(new Set());
   const [credential, setCredential] = useState<Credential | null>(null);
 
-  // Boot: generate (or load) the holder keypair, then ask the server for a
+  // Generates (or loads) the holder keypair, then asks the server for a
   // session bound to it. A holder public key is what lets the issuer bind a
   // real did:key DID + nullifierBinding onto the eventual credential (see
   // lib/holderkey.ts); on browsers without WebCrypto Ed25519 support this
   // resolves to null and enrollment proceeds exactly as it did before this
   // feature existed (v0.1 placeholder DID, no nullifierBinding).
+  //
+  // `code` is only sent when the deployment is invite-gated (config.
+  // invite_code_required) — see the InviteGate branch below. On a gating
+  // rejection (ApiError.code invite_code_required/invite_code_invalid) we
+  // surface a friendly inline message on the invite gate instead of the
+  // generic "cannot reach the issuer" screen.
+  async function beginSession(code?: string) {
+    setStartError(null);
+    setInviteError(null);
+    setStarting(true);
+    try {
+      const keyPair = await getOrCreateHolderKeyPair();
+      const s = await startEnrollment({ holderPublicKeyB64: keyPair?.publicKeyB64, inviteCode: code });
+      setSession(s);
+      if (code) saveInviteCode(code);
+    } catch (e) {
+      if (e instanceof ApiError && (e.code === 'invite_code_required' || e.code === 'invite_code_invalid')) {
+        setInviteError(inviteErrorMessage(e.code) ?? e.message);
+      } else {
+        setStartError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  // Boot: check whether this deployment requires an invite code (and
+  // whether it's a test/dev deployment that exposes magic links on screen —
+  // threaded down to EmailStep) before deciding whether to start a session
+  // automatically or wait for the visitor to submit a code.
   useEffect(() => {
     let alive = true;
     (async () => {
-      try {
-        const keyPair = await getOrCreateHolderKeyPair();
-        if (!alive) return;
-        const s = await startEnrollment({ holderPublicKeyB64: keyPair?.publicKeyB64 });
-        if (!alive) return;
-        setSession(s);
-      } catch (e) {
-        if (!alive) return;
-        setStartError(e instanceof Error ? e.message : String(e));
+      const cfg = await getConfig();
+      if (!alive) return;
+      setConfig(cfg);
+      if (cfg.invite_code_required) {
+        setInviteCode(readSavedInviteCode());
+      } else {
+        void beginSession();
       }
     })();
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const idAvailable = !!session?.available_methods.some((m) => m.id === 'government-id-liveness');
@@ -62,6 +105,11 @@ export default function Page() {
   const emailMethod = session ? selectEmailMethod(session.available_methods) : null;
   const smsMethod = session ? selectSmsMethod(session.available_methods) : null;
   const smsAvailable = !!smsMethod;
+  // "Test mode": no mail credential is configured, so the server either
+  // exposes challenge secrets outright (DEV_EXPOSE_CHALLENGE_SECRETS=1) or
+  // is only logging mail instead of sending it. Either way, EmailStep shows
+  // the on-screen magic link when the begin response actually includes one.
+  const emailDevMode = !!config && (config.challenge_secrets_exposed || config.email_delivery === 'log');
   const stepOrder: StepId[] = selfieAvailable
     ? ['email', 'sms', 'id', 'selfie', 'credential']
     : ['email', 'sms', 'id', 'credential'];
@@ -76,16 +124,20 @@ export default function Page() {
   function restart() {
     setSession(null);
     setStartError(null);
+    setInviteError(null);
     setStep('email');
     setCompleted(new Set());
     setSkipped(new Set());
     setCredential(null);
-    // Reuses the same persisted holder keypair (see lib/holderkey.ts) so a
-    // restart doesn't spuriously mint a new holder identity.
-    getOrCreateHolderKeyPair()
-      .then((keyPair) => startEnrollment({ holderPublicKeyB64: keyPair?.publicKeyB64 }))
-      .then(setSession)
-      .catch((e) => setStartError(String(e)));
+    // beginSession() reuses the same persisted holder keypair (see
+    // lib/holderkey.ts) so a restart doesn't spuriously mint a new holder
+    // identity. When the deployment is invite-gated we deliberately do NOT
+    // auto-submit here — the InviteGate reappears below with `inviteCode`
+    // already prefilled (component state + localStorage), so the visitor
+    // taps Continue once instead of retyping the code.
+    if (!config?.invite_code_required) {
+      void beginSession();
+    }
   }
 
   return (
@@ -100,6 +152,7 @@ export default function Page() {
                 session={session}
                 method={emailMethod}
                 done={completed.has('email')}
+                devMode={emailDevMode}
                 onSent={() => {/* sent; the step polls the server until the link is clicked */}}
                 onVerified={() => markCompleted('email')}
                 onContinue={() => {
@@ -182,6 +235,14 @@ export default function Page() {
             </span>
           </footer>
         </>
+      ) : config?.invite_code_required ? (
+        <InviteGate
+          value={inviteCode}
+          onChange={setInviteCode}
+          error={inviteError}
+          submitting={starting}
+          onSubmit={() => beginSession(inviteCode.trim())}
+        />
       ) : startError ? (
         <div className="boot boot--err">
           <h2>Cannot reach the issuer</h2>

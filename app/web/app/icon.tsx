@@ -1,8 +1,16 @@
 import { ImageResponse } from 'next/og';
 
-// Route segment config — runtime: edge means next/og can render PNGs at the
-// edge. (App Router auto-routes app/icon.tsx to /icon.png.)
-export const runtime = 'edge';
+// Route segment config. (App Router auto-routes app/icon.tsx to /icon.png.)
+//
+// This used to declare `runtime = 'edge'` so next/og could render the PNG at
+// the edge on Vercel. Under `output: 'export'` (static export for Firebase
+// Hosting — see next.config.mjs) there is no edge runtime to render at:
+// `runtime = 'edge'` actually disables static generation for this route
+// entirely, so `next build` silently produced an `out/` with no icon.png.
+// `dynamic = 'force-static'` makes explicit what output: 'export' already
+// requires — render once at build time to a static file — and dropping
+// `runtime` lets that build-time render use the default Node.js runtime.
+export const dynamic = 'force-static';
 
 export const size = { width: 512, height: 512 };
 export const contentType = 'image/png';

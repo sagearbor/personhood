@@ -5,7 +5,14 @@ import { Button } from '../Button';
 import { Card } from '../Card';
 import { Field } from '../Field';
 import type { Status } from '../StatusPill';
-import { beginMethod, getSession, hasVerified, type MethodSummary, type StartEnrollmentResponse } from '@/lib/api';
+import {
+  beginMethod,
+  extractMagicLinkUrl,
+  getSession,
+  hasVerified,
+  type MethodSummary,
+  type StartEnrollmentResponse,
+} from '@/lib/api';
 
 // How often to ask the server whether the magic link has been clicked.
 const POLL_MS = 2500;
@@ -14,6 +21,7 @@ export function EmailStep({
   session,
   method,
   done,
+  devMode,
   onSent,
   onVerified,
   onContinue,
@@ -22,6 +30,16 @@ export function EmailStep({
   /** The method to drive — 'email-tier' when the server advertises it, else plain 'email'. See lib/tiering.ts. */
   method: MethodSummary;
   done: boolean;
+  /**
+   * True when GET /v1/config reports challenge_secrets_exposed or
+   * email_delivery === 'log' — i.e. this deployment cannot actually send
+   * mail, so the server puts the magic link in the begin response instead.
+   * Purely cosmetic: shows a "TEST MODE" notice and, once a begin response
+   * actually carries magic_link_url, a tappable/copyable link. Never
+   * changes the ceremony itself — the poll loop below is unchanged either
+   * way.
+   */
+  devMode?: boolean;
   onSent: (email: string) => void;
   onVerified: () => void;
   onContinue: () => void;
@@ -33,6 +51,8 @@ export function EmailStep({
   const [status, setStatus] = useState<Status>(done ? 'ok' : 'idle');
   const [statusText, setStatusText] = useState<string>(done ? 'verified' : 'awaiting input');
   const [err, setErr] = useState<string | null>(null);
+  const [magicLink, setMagicLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const pollTimer = useRef<number | null>(null);
 
   // Once the link is out, poll the session until the server records the
@@ -72,7 +92,13 @@ export function EmailStep({
     setStatus('pending');
     setStatusText(action === 'resend' ? 'resending' : 'sending');
     try {
-      await beginMethod(methodID, session.session_id, email.trim());
+      const { challenge } = await beginMethod(methodID, session.session_id, email.trim());
+      // Only ever set when the server actually includes it (test/dev
+      // deployments with DEV_EXPOSE_CHALLENGE_SECRETS=1) — extractMagicLinkUrl
+      // returns null on any normal (no-secret) response, so this never
+      // renders anything on a production deployment.
+      setMagicLink(extractMagicLinkUrl(challenge));
+      setCopied(false);
       setSent(true);
       setStatus('pending');
       setStatusText('waiting for click');
@@ -81,6 +107,18 @@ export function EmailStep({
       setStatus('error');
       setStatusText('send failed');
       setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function copyMagicLink() {
+    if (!magicLink) return;
+    try {
+      await navigator.clipboard.writeText(magicLink);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard API unavailable/denied — the link is still visible and
+      // tappable, so this is a non-fatal convenience failure.
     }
   }
 
@@ -118,6 +156,12 @@ export function EmailStep({
     >
       {!verified && (
         <>
+          {devMode && (
+            <p className="devnotice">
+              <strong>TEST MODE</strong> — no email is actually sent; your magic link appears
+              right here once you send it.
+            </p>
+          )}
           <Field
             label="email address"
             type="email"
@@ -143,12 +187,30 @@ export function EmailStep({
                 <Button variant="ghost" onClick={() => send('resend')}>
                   Resend link
                 </Button>
-                <Button variant="ghost" onClick={() => { setSent(false); setStatus('idle'); setStatusText('awaiting input'); }}>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setSent(false);
+                    setStatus('idle');
+                    setStatusText('awaiting input');
+                    setMagicLink(null);
+                  }}
+                >
                   Change address
                 </Button>
               </>
             )}
           </div>
+          {sent && magicLink && (
+            <div className="magiclink">
+              <a href={magicLink} target="_blank" rel="noopener noreferrer" className="magiclink__url">
+                Open magic link &#8599;
+              </a>
+              <Button type="button" variant="ghost" size="sm" onClick={copyMagicLink}>
+                {copied ? 'Copied' : 'Copy link'}
+              </Button>
+            </div>
+          )}
           {sent && (
             <p className="hint">
               Open the email and tap the link — on this phone or any other device. This page notices
@@ -172,6 +234,38 @@ export function EmailStep({
           margin: 0;
           font-size: 13px;
           color: var(--ink-muted);
+        }
+        .devnotice {
+          margin: 0;
+          padding: 10px 12px;
+          border: 1px solid rgba(125, 211, 252, 0.35);
+          background: rgba(125, 211, 252, 0.1);
+          border-radius: var(--r-2);
+          color: var(--info);
+          font-size: 12px;
+          line-height: 1.5;
+        }
+        .devnotice strong {
+          font-family: var(--f-mono);
+          letter-spacing: 0.06em;
+        }
+        .magiclink {
+          display: flex;
+          align-items: center;
+          gap: var(--s-3);
+          flex-wrap: wrap;
+          padding: 10px 12px;
+          border: 1px dashed var(--border-accent);
+          background: var(--accent-faint);
+          border-radius: var(--r-2);
+        }
+        .magiclink__url {
+          font-family: var(--f-mono);
+          font-size: 12px;
+          color: var(--accent);
+          word-break: break-all;
+          text-decoration: underline;
+          text-underline-offset: 2px;
         }
       `}</style>
     </Card>

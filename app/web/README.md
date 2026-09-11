@@ -121,11 +121,35 @@ IndexedDB (optionally biometric-gating via WebAuthn).
 npm run typecheck
 ```
 
+## Deploy (Firebase Hosting)
+
+The app builds to a fully static site (`next.config.mjs` sets
+`output: 'export'`) and deploys to Firebase Hosting instead of Vercel. From
+the **repo root** (`firebase.json` / `.firebaserc` live there, targeting
+hosting site `personhood-web` on the `arborfam-hub` project):
+
+```bash
+NEXT_PUBLIC_PERSONHOOD_SERVER_URL=https://your-issuer.example npm --prefix app/web run build
+firebase deploy --only hosting:web
+```
+
+`npm run build` writes `app/web/out/` (gitignored — see `.gitignore`);
+`firebase.json`'s `hosting.public` points at it and `hosting.target` is
+`web`, which `.firebaserc` maps to the `personhood-web` Hosting site. Since
+`NEXT_PUBLIC_PERSONHOOD_SERVER_URL` is baked in at build time (there's no
+server to read it at request time under a static export), re-run the build
+whenever the issuer URL changes.
+
+Security headers that used to live in `vercel.json`'s `headers` (and, before
+that, in `next.config.mjs`'s `headers()` — which Next.js ignores entirely
+under `output: 'export'`) now live in the root `firebase.json` instead, since
+Firebase Hosting — not Next.js — is what serves every response.
+
 ## Install on Android (production-style)
 
-1. Deploy the web app (e.g. Vercel — see PR #5).
-2. Deploy the server (e.g. Fly.io — see PR #5) and set
-   `NEXT_PUBLIC_PERSONHOOD_SERVER_URL` on the Vercel project.
+1. Deploy the web app (Firebase Hosting — see above).
+2. Deploy the server (e.g. Fly.io — see PR #5) and rebuild with
+   `NEXT_PUBLIC_PERSONHOOD_SERVER_URL` pointed at it.
 3. Open the production URL on Chrome for Android.
 4. Tap the address-bar overflow → "Add to Home screen".
 5. The app launches in standalone mode with the Personhood icon.
