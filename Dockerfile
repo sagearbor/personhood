@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-#
 # Personhood server — multi-stage Dockerfile.
 #
 # Stage 1 (builder): pulls the Go workspace, compiles the server binary with
@@ -29,16 +27,16 @@ COPY pkg     pkg
 COPY src     src
 COPY sdk     sdk
 
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
-    cd src/server && go mod download
+# No BuildKit cache mounts here: Cloud Run source deploys build this file
+# with Cloud Build's legacy (non-BuildKit) docker builder, which rejects
+# `--mount=type=cache`. Local `docker build` is a little slower without the
+# mounts, but every builder can run this file.
+RUN cd src/server && go mod download
 
 # Compile with sendgrid + twilio so real senders are linked. CGO disabled so
 # we get a fully static binary that distroless can run.
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
-    cd src/server && \
+RUN cd src/server && \
     go build -tags 'sendgrid twilio' -trimpath -ldflags="-s -w" \
       -o /out/personhood-server ./cmd/server
 
