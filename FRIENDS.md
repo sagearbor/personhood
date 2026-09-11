@@ -5,21 +5,27 @@ an app **without** telling it who you are. Round 1 uses only your email. It
 takes about three minutes. Nothing is installed; nothing about you is stored
 except a hash.
 
-> **Owner: fill these two lines in before sending this file.**
->
-> - App: `https://<your-web>.vercel.app`  ← the enrollment page
-> - Issuer: `https://<your-app>.fly.dev`  ← the server that signs credentials
->
-> Until they are filled in, the app is only reachable on the owner's laptop
-> (see "Local run" at the bottom).
+> - App: <https://personhood-web.web.app>  ← the enrollment page
+> - Issuer: <https://personhood-issuer-664594784582.us-central1.run.app>  ← the server that signs credentials
+
+## What to expect in test mode
+
+This deployment is running in **test mode**: there's no real mail server
+wired up yet, so instead of emailing you a link, the app shows the magic
+link right there on screen for you to tap. You'll also be asked for an
+**invite code** before you can start — ask the owner for it (it's not
+written down anywhere in this repo). Nothing else about the flow is
+different: your email address goes to the issuer just like it would with
+real mail delivery, you just don't have to leave the app to click the link.
 
 ## What you do
 
-1. **Open the app link** on your phone or laptop. You'll see four steps:
-   Email, SMS, ID + Selfie, Credential. Only Email is required in round 1.
+1. **Open the app link** on your phone or laptop. If asked for an **invite
+   code**, ask the owner for it. You'll see four steps: Email, SMS, ID +
+   Selfie, Credential. Only Email is required in round 1.
 2. **Type your email address** and tap **Send magic link**.
-3. **Open the email** ("Confirm your email") and tap the link. A page says
-   "Email verified". Close it.
+3. **Tap the link shown on screen** (test mode — see above; no email
+   actually arrives). A page says "Email verified". Close it.
 4. **Go back to the app tab.** Within a few seconds the Email step turns
    green by itself (it checks every few seconds; tap **Check again** if you're
    impatient). Tap **Continue**.
@@ -61,11 +67,12 @@ is about proving the plumbing works end to end with real people.
 - Verify a credential someone sent you:
   ```bash
   go run ./tools/verify-credential -cred friend.json \
-      -policy docs/policies/round1-email.yaml -issuer-url https://<your-app>.fly.dev
+      -policy docs/policies/round1-email.yaml \
+      -issuer-url https://personhood-issuer-664594784582.us-central1.run.app
   ```
   Exit 0 = good. `code` tells you why if not.
 - Give OpenLine (or any integrator) the issuer key to pin:
-  `curl -s https://<your-app>.fly.dev/.well-known/did.json | jq -r '.id, .verificationMethod[0].publicKeyJwk.x'`
+  `curl -s https://personhood-issuer-664594784582.us-central1.run.app/.well-known/did.json | jq -r '.id, .verificationMethod[0].publicKeyJwk.x'`
 - Each restart of the v0.1 server wipes in-flight sessions (in-memory); issued
   credentials stay valid because verification only needs the public key.
 - **Keep `ISSUER_ED25519_SK_B64` stable.** Rotating it invalidates every

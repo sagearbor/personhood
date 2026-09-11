@@ -6,6 +6,49 @@
 
 ---
 
+## Round-6 session summary (2026-09-11, overnight)
+
+**The first real deploy is live.** Personhood now runs on Google Cloud
+instead of nothing:
+
+- Web app: <https://personhood-web.web.app> (Firebase Hosting, static Next.js export)
+- Issuer: <https://personhood-issuer-664594784582.us-central1.run.app> (Cloud Run, source build)
+
+Shipped in three PRs: #41 (Cloud Run source-build compatibility — removed
+Dockerfile cache mounts, since Cloud Build's legacy docker builder doesn't
+support BuildKit), #42 (`.gcloudignore` for the source-build upload context,
+plus a `GET /health` alias for `/healthz` — Cloud Run's frontend intercepts
+`GET /healthz` on `*.run.app` and 404s before the container ever sees it),
+and #43 (invite-code gate + `GET /v1/config`, on-screen magic link in test
+mode, static export + Firebase Hosting config). The issuer signing key lives
+only in Secret Manager (`personhood-issuer-key`) — never in a file, never in
+git. `max-instances=1` is load-bearing, not a cost knob: sessions and
+challenge tokens are in-memory with no Redis wired up for this deployment, so
+two concurrent instances would silently drop each other's sessions.
+
+**Test mode is on**, same shape as round-1's Fly path but with two additions
+this session: an `ENROLLMENT_INVITE_CODE` gate (there's no mail credential
+configured, so `DEV_EXPOSE_CHALLENGE_SECRETS=1` shows the magic link on
+screen instead of emailing it — without an invite gate that would let anyone
+enroll any email address as themselves) and `GET /v1/config` so the web app
+can discover both facts before showing the enrollment UI. This is
+appropriate for 5 trusted friends and nothing more; turning it off (real
+SMTP + drop `DEV_EXPOSE_CHALLENGE_SECRETS`) is Sprint 1 follow-up 4b below.
+
+Full deploy commands, the `/healthz` gotcha, the key-backup and
+invite-code-rotation instructions, and the exact "turn test mode off" steps
+are now in `RUNBOOK.md`'s "§6-alt / §7-alt — Google Cloud" section (the
+Fly/Vercel path stays documented as a working alternative, just not what's
+running). `scripts/deploy-cloudrun.sh` and `scripts/deploy-web-firebase.sh`
+wrap the deploy commands idempotently for next time; `scripts/e2e-remote.sh`
+re-proves the round-1 path against a live remote issuer (enroll by email →
+issue → `verify-credential` accepts `round1-email.yaml`, rejects
+`default-floor.yaml` with `anchor_missing`) and passed against the live
+deployment this session. `FRIENDS.md`'s two placeholder URLs are filled in.
+
+Everything below this paragraph documents earlier sessions, including the
+now-stale "Nothing is deployed yet" note under Round-3.
+
 ## Current state — last updated 2026-09-10 (overnight round-5 session)
 
 Since the round-4 session below: two gentle, self-contained follow-ups from
@@ -77,10 +120,12 @@ with `z`) is fixed (#31). All open method PRs (#23 email-tier, #24
 phone-carrier-tier, #25 paid-billing-card) and the README rewrite (#27) are
 merged; the Capacitor scaffold (#26) is closed until the PWA has a live URL.
 
-**Nothing is deployed yet.** Fly/Vercel CLIs and credentials are not on the
-dev machine; `RUNBOOK.md` §2b lists the exact round-1 deploy steps and
-`FRIENDS.md` is the friend-facing walkthrough (fill in its two URLs after
-deploying).
+**Deployed as of the round-6 session (2026-09-11)** — see that summary at the
+top of this file. Live URLs: web <https://personhood-web.web.app>, issuer
+<https://personhood-issuer-664594784582.us-central1.run.app> (Google Cloud
+Run + Firebase Hosting, not Fly/Vercel — `RUNBOOK.md`'s "§6-alt / §7-alt"
+section has the exact commands; §2b below still describes the Fly/Vercel
+path as a working alternative). `FRIENDS.md`'s two URLs are filled in.
 
 ```bash
 bash scripts/test-all.sh      # every go.work module with -race (incl. tests/, tools/)
@@ -129,6 +174,8 @@ anchor verified within 24h, so round-1 credentials are rejected there with
 | **Fuzzy-extractor-selfie anchor** | `src/methods/fuzzy-extractor-selfie/`, `app/web/components/steps/SelfieStep.tsx` | **Airdrop-test anchor (checklist #10a).** Strength 70, anchor, $0.00, no vendor. From-scratch pure-Go fuzzy-extractor (Juels-Wattenberg fuzzy commitment over a repetition code — see the package's extractor.go doc comment) rather than an FFI wrap of the OpenLine Rust prototype (see the decision note in that doc comment). Server-side `Accumulator` does a Sybil-dedup membership scan (fuzzy-extractor `Rep` against every stored helper-data record — no raw biometric ever stored). `src/server/did.go`'s `NullifierBindingForBiometricCommitment` binds the issued credential's `nullifierBinding` to this method's biometric commitment (not the regenerable holder device keypair) whenever it's the anchor — closing the "mint a new keypair, get a new nullifier" loophole for OpenLine's UBI-claim / vote use cases. Registers when `FUZZY_EXTRACTOR_ENABLED=1` (no vendor credential to gate on otherwise). 20 unit tests + 6 server-integration tests + a real-server e2e test, all `-race` green. **Client wiring (round-5, PR #39):** a camera-or-upload enrollment step in `app/web` derives a deterministic feature vector on-device (`lib/selfieTemplate.ts` — a documented placeholder for a real face-embedding model) and drives begin/complete against the real server; 9 vitest unit tests + a real headless-browser run incl. the duplicate-detection path. |
 | **Social-vouching-graph supplementary** | `src/methods/social-vouching/` | **Airdrop-test web of trust (checklist #10b).** Strength 35, **supplementary** (docs/06-methods-catalog.md scores it 35, below the registry's hard-enforced 50-point anchor floor — see that method's README for why it ships supplementary despite the checklist item's "anchor" wording). BrightID-style: an existing member vouches for a candidate via `POST /v1/methods/social-vouching-graph/vouch` (the same "extra method-owned HTTP route" mechanism every vendor webhook already uses); a simplified SybilRank-style weighted-vouch-with-decay score gates admission, and a newly-admitted member is enrolled at a decayed trust score so they can vouch for others afterwards (a chained-vouching test proves trust actually propagates, not just a fixed-seed allowlist). Registers when `SOCIAL_VOUCHING_ENABLED=1` + `SOCIAL_VOUCHING_SECRET` + operator-configured `SOCIAL_VOUCHING_SEED_IDS`. 27 unit tests + 4 server-integration tests, all `-race` green. |
 | **Airdrop-anchor example policy** | `docs/policies/airdrop-anchor-example.yaml` | `anchor_required: true` + `nullifier_required: true`, `allowed_methods: [fuzzy-extractor-selfie, social-vouching-graph]`. Proven three ways against a real running server in `tests/e2e_airdrop_anchors_test.go`: fuzzy-extractor-selfie alone passes with a real nullifier; social-vouching-graph alone correctly fails `anchor_missing`; both together on one credential compose and pass. |
+| **Google Cloud deploy (Cloud Run + Firebase Hosting)** | `scripts/deploy-cloudrun.sh`, `scripts/deploy-web-firebase.sh`, `scripts/e2e-remote.sh`, `.gcloudignore` | **Round-6 (PRs #41/#42/#43).** The live round-1 deployment: issuer on Cloud Run (source build, `--max-instances 1` since sessions are in-memory with no Redis wired up here), web app as a static Next.js export on Firebase Hosting. Issuer key lives only in Secret Manager, never in git. `scripts/deploy-cloudrun.sh` / `scripts/deploy-web-firebase.sh` are idempotent, parameterized wrappers around the exact `gcloud`/`firebase` commands run tonight (never overwrite an existing signing-key secret); `scripts/e2e-remote.sh` re-proves enroll → issue → verify against a live remote issuer. See `RUNBOOK.md`'s "§6-alt / §7-alt" section for the full command reference, the `/healthz`-vs-`/health` Cloud Run gotcha, and how to turn test mode off. |
+| **`/v1/config` + invite gate** | `src/server/handlers.go`, `src/server/config.go` | New public `GET /v1/config` endpoint reports `{invite_code_required, challenge_secrets_exposed, email_delivery}` so a client can decide whether to prompt for an invite code and whether to warn that magic links are shown on screen rather than emailed — never leaks the code itself. `ENROLLMENT_INVITE_CODE` (env), when set, requires a matching `invite_code` field on `POST /enrollment/start` (constant-time compare; `403 invite_code_required` / `403 invite_code_invalid` otherwise). This is what makes `DEV_EXPOSE_CHALLENGE_SECRETS=1` safe enough for a small trusted cohort in production — see `config_endpoint_test.go`. |
 
 ### What's stub
 
@@ -157,6 +204,9 @@ Tackle in order. Each item is sized to be one PR. Copy any of the **bold prompts
 
 - [x] **4. Deploy server + web for phone testing.** ✅ PR #11 (`feat/deploy-config`) + PR #12 (`feat/runbook`)
   > `Dockerfile` (multi-stage, distroless/nonroot), `fly.toml`, `app/web/vercel.json`, CI workflow. `RUNBOOK.md` walks clean-machine → verified-on-phone in ~20 minutes hands-on.
+
+- [ ] **4b. Turn test mode off: SMTP creds, remove DEV_EXPOSE_CHALLENGE_SECRETS.**
+  > *The live round-6 deployment runs with `DEV_EXPOSE_CHALLENGE_SECRETS=1` (magic link shown on screen, no real mail credential configured). Set `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM` (a Gmail app password works — RUNBOOK.md §3b-alt) on the Cloud Run service and remove `DEV_EXPOSE_CHALLENGE_SECRETS`; see RUNBOOK.md's "§6-alt / §7-alt" section for the exact `gcloud run services update` command. Confirm via `GET /v1/config` that `challenge_secrets_exposed` flips to `false`.*
 
 **Sprint 1 outcome:** you can open `https://<your-app>.vercel.app` on your Android phone, Add to Home Screen, complete email + SMS + government-ID-selfie, and see your signed W3C credential. The credential satisfies `anchor_required: true` policies because the gov-id anchor is fully wired.
 
