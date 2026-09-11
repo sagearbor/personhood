@@ -22,9 +22,17 @@ in this RUNBOOK to confirm the previous step worked.
 
 ## TL;DR for the impatient
 
+> **What's live right now:** web <https://personhood-web.web.app>, issuer
+> <https://personhood-issuer-664594784582.us-central1.run.app> (Google Cloud
+> Run + Firebase Hosting — see "§6-alt / §7-alt" below for the exact commands
+> already run; the Fly/Vercel steps below remain a working alternative path
+> but are not what's currently deployed). Verify it's up:
+> `bash scripts/e2e-remote.sh https://personhood-issuer-664594784582.us-central1.run.app <invite-code>`
+
 ```bash
 # 0. prereqs (one-time):
 #    Go 1.22+, Node 20+, git, gh, fly CLI, vercel CLI.
+#    (or: gcloud CLI + firebase CLI for the Google Cloud path actually deployed)
 
 # 1. clone
 git clone git@github.com:sagearbor/personhood.git
@@ -168,6 +176,169 @@ Deploy checklist for round 1, in order:
 **Keep the issuer key stable.** `ISSUER_ED25519_SK_B64` is the root of trust;
 rotating it invalidates every credential issued so far. Back it up (e.g. a
 password manager) the moment `gen-key` prints it.
+
+## §6-alt / §7-alt — Google Cloud (Cloud Run + Firebase Hosting), what is deployed today
+
+**The live round-1 deployment uses this path, not Fly/Vercel.** §6 and §7
+below are kept as the alternative/original path (they still work and are not
+being removed), but as of 2026-09-11 the actual running instances are:
+
+| Component | Where | URL |
+|---|---|---|
+| Issuer | Cloud Run service `personhood-issuer`, project `arborfam-hub`, region `us-central1` | <https://personhood-issuer-664594784582.us-central1.run.app> |
+| Web app | Firebase Hosting site `personhood-web`, same project | <https://personhood-web.web.app> |
+
+Both are driven by `scripts/deploy-cloudrun.sh` and `scripts/deploy-web-firebase.sh`
+(parameterized, idempotent wrappers around the exact commands below) rather
+than by hand — read those scripts' headers for full usage. `scripts/e2e-remote.sh`
+proves the round-1 path end to end against a deployed issuer.
+
+### What was actually run
+
+**One-time setup:**
+
+```bash
+gcloud services enable secretmanager.googleapis.com --project arborfam-hub
+```
+
+**Issuer signing key — generated once, stored only in Secret Manager, never
+committed:**
+
+```bash
+go run ./src/server/cmd/gen-key
+gcloud secrets create personhood-issuer-key --data-file=- --project arborfam-hub
+# (pipe the ISSUER_ED25519_SK_B64 value in via stdin; do not paste it as an arg)
+
+gcloud secrets add-iam-policy-binding personhood-issuer-key \
+  --project arborfam-hub \
+  --member="serviceAccount:664594784582-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+**Back up the key** (rotating it invalidates every credential issued so far —
+same rule as Fly's `ISSUER_ED25519_SK_B64`):
+
+```bash
+gcloud secrets versions access latest --secret=personhood-issuer-key --project arborfam-hub
+# paste the output into a password manager
+```
+
+**Deploy the issuer** (source build — no local Docker needed; Cloud Build's
+legacy docker builder does not support BuildKit, which is why PR #41 removed
+the Dockerfile's cache mounts, and `.gcloudignore`, added in PR #42, controls
+what gets uploaded as the build context):
+
+```bash
+gcloud run deploy personhood-issuer \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --memory 256Mi \
+  --max-instances 1 \
+  --set-secrets ISSUER_ED25519_SK_B64=personhood-issuer-key:latest \
+  --set-env-vars SERVER_PUBLIC_URL=https://personhood-issuer-664594784582.us-central1.run.app,CORS_ALLOWED_ORIGINS=https://personhood-web.web.app,DEV_EXPOSE_CHALLENGE_SECRETS=1,ENROLLMENT_INVITE_CODE=<code>
+```
+
+**`--max-instances 1` is required, not a cost optimization**: sessions and
+challenge tokens are stored in-memory (no Redis wired up for this
+deployment — see the "Redis-backed stores" row in STATUS.md for the
+infrastructure that exists but isn't turned on here). A second concurrent
+instance would not see the first instance's sessions, so enrollments would
+randomly fail depending on which instance handled which request.
+`min-instances` is left at its default of 0 so the service stays inside the
+Cloud Run free tier — the cost of that is that the single instance idles out
+after ~15 minutes of no traffic, and in-flight (not-yet-issued) sessions are
+lost when it does. That's what "Start over" in the web app is for; already
+**issued** credentials remain valid regardless (verification only needs the
+issuer's public key, not server state).
+
+**Deploy the web app** (static Next.js export → Firebase Hosting; `firebase.json`
+/ `.firebaserc` landed in PR #43; the site itself was created once with
+`firebase hosting:sites:create personhood-web --project arborfam-hub`):
+
+```bash
+cd app/web
+NEXT_PUBLIC_PERSONHOOD_SERVER_URL=https://personhood-issuer-664594784582.us-central1.run.app npm run build
+cd ..
+firebase deploy --only hosting:web --project arborfam-hub
+```
+
+### The `/healthz` gotcha on Cloud Run
+
+Google's Cloud Run frontend intercepts `GET /healthz` on `*.run.app` domains
+and returns its own 404 **before the request reaches the container** — every
+other path (including `/health`) passes through normally. PR #42 added a
+second `GET /health` route (identical handler) specifically so probes and
+smoke tests have something that actually reaches the server. **Always use
+`/health` against a Cloud Run deployment**, not `/healthz` — `scripts/deploy-cloudrun.sh`
+and `scripts/e2e-remote.sh` both do.
+
+### Issuer identity
+
+```
+DID:  did:web:personhood-issuer-664594784582.us-central1.run.app
+JWK x: AB3aeJhjKNB7FvsX2QjsSMKbceYdAyS2KduSLj7ZjMY   (from /.well-known/did.json)
+```
+
+Hand these to OpenLine (or any integrator) to pin, same as the Fly/Vercel
+path's step 6 above.
+
+### Test mode — what's on and why
+
+There is no mail credential configured for this deployment, so
+`DEV_EXPOSE_CHALLENGE_SECRETS=1` is set in production and the web app shows
+the magic link on screen instead of emailing it — `GET /v1/config` reports
+`challenge_secrets_exposed: true` so the client knows to display it. That is
+gated by `ENROLLMENT_INVITE_CODE`: the web app prompts for the invite code
+(discovering via `GET /v1/config`'s `invite_code_required` field that one is
+needed) before it will start an enrollment. **Anyone who has the invite code
+can enroll any email address as themselves** — acceptable for a handful of
+trusted friends, **not** acceptable for the general public.
+
+**Rotate the invite code** (does not touch the issuer key, so nothing already
+issued is affected):
+
+```bash
+gcloud run services update personhood-issuer \
+  --region us-central1 \
+  --update-env-vars ENROLLMENT_INVITE_CODE=<new-code>
+```
+
+**Turn test mode off** once real mail delivery is wired up: set the SMTP
+vars (a Gmail app password works — see §3b-alt above for how to generate
+one) and remove `DEV_EXPOSE_CHALLENGE_SECRETS` in the same call:
+
+```bash
+gcloud run services update personhood-issuer \
+  --region us-central1 \
+  --update-env-vars SMTP_HOST=smtp.gmail.com,SMTP_PORT=587,SMTP_USER=you@gmail.com,SMTP_PASS=<16-char app password>,SMTP_FROM=you@gmail.com \
+  --remove-env-vars DEV_EXPOSE_CHALLENGE_SECRETS
+```
+
+After that, `GET /v1/config` should report `challenge_secrets_exposed: false`
+and `email_delivery` should no longer be `log`. This is tracked as Sprint 1
+follow-up item 4b in STATUS.md.
+
+### Verification commands
+
+Smoke test (also run automatically at the end of `scripts/deploy-cloudrun.sh`):
+
+```bash
+curl -s https://personhood-issuer-664594784582.us-central1.run.app/health
+curl -s https://personhood-issuer-664594784582.us-central1.run.app/v1/methods
+curl -s https://personhood-issuer-664594784582.us-central1.run.app/.well-known/did.json
+```
+
+Full round-1 enrollment → issue → verify, against the real deployed issuer
+(builds `tools/verify-credential` into a temp dir, no state left behind):
+
+```bash
+bash scripts/e2e-remote.sh https://personhood-issuer-664594784582.us-central1.run.app <invite-code>
+```
+
+Expected: `e2e-remote PASSED` — `round1-email.yaml` verifies OK, and
+`default-floor.yaml` rejects the same credential with `anchor_missing` (this
+deployment has no anchor method registered, by design for round 1).
 
 ## 2c. Airdrop-test anchors — fuzzy-extractor-selfie + social-vouching-graph (no vendor accounts)
 
@@ -413,6 +584,10 @@ you're ready.
 
 ## 6. Deploy the server to Fly.io
 
+> **The live round-1 deployment uses Google Cloud (Cloud Run), not Fly —
+> see "§6-alt / §7-alt" above.** This section remains as the alternative
+> deploy path; it is fully functional, just not what's currently running.
+
 From the repo root:
 
 ```bash
@@ -469,6 +644,10 @@ curl -s "$APP_URL/v1/methods" | jq '.methods[].id'
 ```
 
 ## 7. Deploy the web app to Vercel
+
+> **The live round-1 deployment uses Firebase Hosting, not Vercel — see
+> "§6-alt / §7-alt" above.** This section remains as the alternative deploy
+> path; it is fully functional, just not what's currently running.
 
 ```bash
 cd app/web

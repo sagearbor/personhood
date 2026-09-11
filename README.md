@@ -13,6 +13,10 @@ Personhood issues credentials built from composable verification *methods*, and 
 > - The App Attest anchor ships a **dev HMAC verifier**; real Apple/Google attestation validation is v0.2.
 > - Holder DIDs are a **hash placeholder** (`did:personhood:holder:<sha256>`), and the revocation status list is **published unsigned**.
 > - All server/method stores are **in-memory** (no horizontal scaling yet).
+>
+> **Live test-mode demo (invite-only):** web <https://personhood-web.web.app>,
+> issuer <https://personhood-issuer-664594784582.us-central1.run.app>. See
+> [`FRIENDS.md`](FRIENDS.md) if you were invited to try it.
 
 ## Why this matters
 
