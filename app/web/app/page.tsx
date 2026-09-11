@@ -6,6 +6,7 @@ import { Progress, type StepId } from '@/components/Progress';
 import { EmailStep } from '@/components/steps/EmailStep';
 import { SmsStep } from '@/components/steps/SmsStep';
 import { IdStep } from '@/components/steps/IdStep';
+import { SelfieStep } from '@/components/steps/SelfieStep';
 import { CredentialStep } from '@/components/steps/CredentialStep';
 import { startEnrollment, type StartEnrollmentResponse, type Credential, SERVER_URL } from '@/lib/api';
 import { selectEmailMethod, selectSmsMethod } from '@/lib/tiering';
@@ -45,6 +46,15 @@ export default function Page() {
   }, []);
 
   const idAvailable = !!session?.available_methods.some((m) => m.id === 'government-id-liveness');
+  // fuzzy-extractor-selfie only appears in available_methods when the
+  // issuer was started with FUZZY_EXTRACTOR_ENABLED=1 (see
+  // src/server/server.go's BuildDependencies) — that env var IS the "flag"
+  // this step is gated by; available_methods is simply how its effect is
+  // exposed to the client, the same pattern IdStep already uses for
+  // government-id-liveness (gated server-side by whether a Persona key is
+  // configured). A round-1 deployment without the flag set never sees this
+  // step or its progress pill at all.
+  const selfieAvailable = !!session?.available_methods.some((m) => m.id === 'fuzzy-extractor-selfie');
   // Prefer the tiered variants (email-tier / phone-carrier-tier) whenever the
   // server advertises them; fall back to plain email/sms otherwise. See
   // lib/tiering.ts — this is the "retire the plain email/sms paths" swap
@@ -52,6 +62,9 @@ export default function Page() {
   const emailMethod = session ? selectEmailMethod(session.available_methods) : null;
   const smsMethod = session ? selectSmsMethod(session.available_methods) : null;
   const smsAvailable = !!smsMethod;
+  const stepOrder: StepId[] = selfieAvailable
+    ? ['email', 'sms', 'id', 'selfie', 'credential']
+    : ['email', 'sms', 'id', 'credential'];
 
   function markCompleted(id: StepId) {
     setCompleted((s) => new Set(s).add(id));
@@ -80,7 +93,7 @@ export default function Page() {
       <Brand />
       {session ? (
         <>
-          <Progress current={step} completed={completed} skip={skipped} />
+          <Progress current={step} completed={completed} skip={skipped} steps={stepOrder} />
           <div className="stage">
             {step === 'email' && emailMethod && (
               <EmailStep
@@ -120,10 +133,26 @@ export default function Page() {
                 onVerified={() => markCompleted('id')}
                 onSkip={() => {
                   markSkipped('id');
-                  setStep('credential');
+                  setStep(selfieAvailable ? 'selfie' : 'credential');
                 }}
                 onContinue={() => {
                   markCompleted('id');
+                  setStep(selfieAvailable ? 'selfie' : 'credential');
+                }}
+              />
+            )}
+            {step === 'selfie' && selfieAvailable && (
+              <SelfieStep
+                session={session}
+                available={selfieAvailable}
+                done={completed.has('selfie')}
+                onVerified={() => markCompleted('selfie')}
+                onSkip={() => {
+                  markSkipped('selfie');
+                  setStep('credential');
+                }}
+                onContinue={() => {
+                  markCompleted('selfie');
                   setStep('credential');
                 }}
               />
@@ -132,7 +161,10 @@ export default function Page() {
               <CredentialStep
                 session={session}
                 credential={credential}
-                hasAnchor={completed.has('id') && !skipped.has('id')}
+                hasAnchor={
+                  (completed.has('id') && !skipped.has('id')) ||
+                  (completed.has('selfie') && !skipped.has('selfie'))
+                }
                 onIssued={(c) => {
                   setCredential(c);
                   markCompleted('credential');

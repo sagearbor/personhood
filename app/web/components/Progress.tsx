@@ -2,31 +2,47 @@
 // Active pill scans (animated background), completed pills are filled in
 // accent, future pills are dimmed.
 
-export type StepId = 'email' | 'sms' | 'id' | 'credential';
+export type StepId = 'email' | 'sms' | 'id' | 'selfie' | 'credential';
 
-const ORDER: { id: StepId; label: string; short: string }[] = [
-  { id: 'email', label: 'Email', short: '01' },
-  { id: 'sms', label: 'SMS', short: '02' },
-  { id: 'id', label: 'ID + Selfie', short: '03' },
-  { id: 'credential', label: 'Credential', short: '04' },
-];
+const DEFAULT_ORDER: StepId[] = ['email', 'sms', 'id', 'credential'];
 
+const LABELS: Record<StepId, { label: string; short: string }> = {
+  email: { label: 'Email', short: '01' },
+  sms: { label: 'SMS', short: '02' },
+  id: { label: 'ID + Selfie', short: '03' },
+  // "selfie" (fuzzy-extractor-selfie) is only inserted into the order when
+  // the issuer advertises the method (see app/page.tsx) — round-1
+  // deployments without FUZZY_EXTRACTOR_ENABLED never render this pill, so
+  // their 4-step layout is byte-for-byte unchanged from before this step
+  // existed.
+  selfie: { label: 'Selfie anchor', short: '04' },
+  credential: { label: 'Credential', short: '05' },
+};
+
+/**
+ * steps overrides the pill order (used to insert the optional "selfie"
+ * step only when fuzzy-extractor-selfie is registered — see app/page.tsx);
+ * defaults to the original fixed 4-step order otherwise.
+ */
 export function Progress({
   current,
   completed,
   skip,
+  steps,
 }: {
   current: StepId;
   completed: Set<StepId>;
   skip?: Set<StepId>;
+  steps?: StepId[];
 }) {
+  const order = steps && steps.length > 0 ? steps : DEFAULT_ORDER;
   return (
     <nav className="progress" aria-label="Enrollment progress">
-      <ol>
-        {ORDER.map((step, idx) => {
-          const isCurrent = step.id === current;
-          const isDone = completed.has(step.id);
-          const isSkipped = skip?.has(step.id);
+      <ol style={{ gridTemplateColumns: `repeat(${order.length}, 1fr)` }}>
+        {order.map((id, idx) => {
+          const isCurrent = id === current;
+          const isDone = completed.has(id);
+          const isSkipped = skip?.has(id);
           const cls = [
             'pill',
             isCurrent && 'pill--current',
@@ -36,10 +52,10 @@ export function Progress({
             .filter(Boolean)
             .join(' ');
           return (
-            <li key={step.id} className={cls}>
-              <span className="pill__num">{step.short}</span>
-              <span className="pill__label">{step.label}</span>
-              {idx < ORDER.length - 1 && <span className="pill__tick" aria-hidden />}
+            <li key={id} className={cls}>
+              <span className="pill__num">{LABELS[id].short}</span>
+              <span className="pill__label">{LABELS[id].label}</span>
+              {idx < order.length - 1 && <span className="pill__tick" aria-hidden />}
             </li>
           );
         })}
@@ -56,7 +72,9 @@ export function Progress({
         }
         ol {
           display: grid;
-          grid-template-columns: repeat(4, 1fr);
+          /* grid-template-columns is set inline (see the <ol> element above)
+             so the pill count can vary — repeat(4, 1fr) by default, 5 when
+             the optional "selfie" step is inserted. */
           gap: var(--s-1);
           list-style: none;
           padding: 0;

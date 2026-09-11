@@ -54,6 +54,8 @@ jobs:
         run: cd app/web && npm ci --no-audit --no-fund
       - name: Type-check
         run: cd app/web && npm run typecheck
+      - name: Unit tests
+        run: cd app/web && npm run test
       - name: Build
         run: cd app/web && npm run build
 
