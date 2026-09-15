@@ -6,6 +6,53 @@
 
 ---
 
+## Round-7 session summary (2026-09-15, overnight)
+
+**The live deployment's state now survives restarts.** Added
+`pkg/firestoreclient` — a minimal, hand-rolled Firestore REST client (same
+dependency-free philosophy as `pkg/redisclient`: no
+`cloud.google.com/go/firestore`, no grpc/protobuf tree; auth via the Cloud
+Run/GCE metadata server's OAuth2 token endpoint, or no auth at all against
+`FIRESTORE_EMULATOR_HOST`) — plus `FirestoreSessionStore`,
+`email.FirestoreTokenStore`, `sms.FirestoreOTPStore`, and
+`government-id-liveness.FirestoreResultStore`, selected via
+`FIRESTORE_PROJECT_ID` in each `New*FromEnv` factory (same shape as
+round-5's Redis stores; `FIRESTORE_PROJECT_ID` takes priority over
+`REDIS_URL` when both are set). Tests run against a real Firestore emulator
+(`firebase emulators:exec --only firestore` — needs Java 21+; this machine's
+default `java` is 17, use `JAVA_HOME=$(brew --prefix openjdk@21)`), not
+mocks, and are green with `-race` across all five affected modules.
+
+**Deployed live** with `FIRESTORE_PROJECT_ID=arborfam-hub` (the project
+already had a free-tier Firestore Native `(default)` database from other
+work in this GCP project — no `firestore databases create` needed; the
+deploy script enables `firestore.googleapis.com` and grants the Cloud Run
+service account `roles/datastore.user` idempotently either way). Proved
+persistence for real: started an enrollment + verified email against
+revision `personhood-issuer-00003-c2s`, redeployed (a fresh container,
+revision `personhood-issuer-00004-5mx`), then resumed the *same* session ID
+and issued a credential from it — impossible with the in-memory store, which
+the round-6 deployment still ran (state died with the container in well
+under the 15-minute scale-to-zero window `README.md` warns about). Test mode
+(`DEV_EXPOSE_CHALLENGE_SECRETS=1`, `ENROLLMENT_INVITE_CODE`) is unchanged.
+`scripts/e2e-remote.sh` against the live issuer and a real Chrome run of
+`app/web` at a phone viewport both pass post-deploy.
+
+Firestore documents store one opaque JSON blob per record (base64 in a
+`blob` field) plus an `expires_at` timestamp field that only the *client*
+checks on read (no server-side TTL policy is configured) — deliberately
+identical to how `RedisSessionStore`/`Redis*Store` treat Redis TTLs, so the
+two backends share the exact same `sessionRecord`/`redisTokenEntry`/etc.
+serialization types and expiry semantics. `RedisResultStore` PR is
+also the template for `store_firestore.go`'s shape in each method package.
+
+| Module | Path | What works |
+|---|---|---|
+| **Firestore-backed stores** | `pkg/firestoreclient/`, `src/server/session_firestore.go`, `src/methods/{email,sms,government-id-liveness}/store_firestore.go` | Hand-rolled, dependency-free Firestore REST client (matches `pkg/redisclient`'s convention). `SessionStore`, `email.TokenStore`, `sms.OTPStore`, and `government-id-liveness.ResultStore` each gained a Firestore-backed implementation selected via `FIRESTORE_PROJECT_ID` (`NewSessionStoreFromEnv` / `*.NewTokenStoreFromEnv` / `*.NewOTPStoreFromEnv` / `*.NewResultStoreFromEnv`; priority over `REDIS_URL`, which itself remains priority over in-memory). Verified against a real Firestore emulator (unit + integration tests, `-race` green) and against production: an enrollment session survived a real Cloud Run revision restart end-to-end (resumed + issued a credential from the pre-restart session ID on the new revision). |
+| **Live deploy: Firestore-backed persistence** | `scripts/deploy-cloudrun.sh` | Now accepts `FIRESTORE_PROJECT_ID` — enables `firestore.googleapis.com`, grants the compute service account `roles/datastore.user`, and passes the env var through. The round-7 live deployment runs with it set to `arborfam-hub`; round-6's in-memory-only deployment is superseded. |
+
+---
+
 ## Round-6 session summary (2026-09-11, overnight)
 
 **The first real deploy is live.** Personhood now runs on Google Cloud
@@ -174,7 +221,8 @@ anchor verified within 24h, so round-1 credentials are rejected there with
 | **Fuzzy-extractor-selfie anchor** | `src/methods/fuzzy-extractor-selfie/`, `app/web/components/steps/SelfieStep.tsx` | **Airdrop-test anchor (checklist #10a).** Strength 70, anchor, $0.00, no vendor. From-scratch pure-Go fuzzy-extractor (Juels-Wattenberg fuzzy commitment over a repetition code — see the package's extractor.go doc comment) rather than an FFI wrap of the OpenLine Rust prototype (see the decision note in that doc comment). Server-side `Accumulator` does a Sybil-dedup membership scan (fuzzy-extractor `Rep` against every stored helper-data record — no raw biometric ever stored). `src/server/did.go`'s `NullifierBindingForBiometricCommitment` binds the issued credential's `nullifierBinding` to this method's biometric commitment (not the regenerable holder device keypair) whenever it's the anchor — closing the "mint a new keypair, get a new nullifier" loophole for OpenLine's UBI-claim / vote use cases. Registers when `FUZZY_EXTRACTOR_ENABLED=1` (no vendor credential to gate on otherwise). 20 unit tests + 6 server-integration tests + a real-server e2e test, all `-race` green. **Client wiring (round-5, PR #39):** a camera-or-upload enrollment step in `app/web` derives a deterministic feature vector on-device (`lib/selfieTemplate.ts` — a documented placeholder for a real face-embedding model) and drives begin/complete against the real server; 9 vitest unit tests + a real headless-browser run incl. the duplicate-detection path. |
 | **Social-vouching-graph supplementary** | `src/methods/social-vouching/` | **Airdrop-test web of trust (checklist #10b).** Strength 35, **supplementary** (docs/06-methods-catalog.md scores it 35, below the registry's hard-enforced 50-point anchor floor — see that method's README for why it ships supplementary despite the checklist item's "anchor" wording). BrightID-style: an existing member vouches for a candidate via `POST /v1/methods/social-vouching-graph/vouch` (the same "extra method-owned HTTP route" mechanism every vendor webhook already uses); a simplified SybilRank-style weighted-vouch-with-decay score gates admission, and a newly-admitted member is enrolled at a decayed trust score so they can vouch for others afterwards (a chained-vouching test proves trust actually propagates, not just a fixed-seed allowlist). Registers when `SOCIAL_VOUCHING_ENABLED=1` + `SOCIAL_VOUCHING_SECRET` + operator-configured `SOCIAL_VOUCHING_SEED_IDS`. 27 unit tests + 4 server-integration tests, all `-race` green. |
 | **Airdrop-anchor example policy** | `docs/policies/airdrop-anchor-example.yaml` | `anchor_required: true` + `nullifier_required: true`, `allowed_methods: [fuzzy-extractor-selfie, social-vouching-graph]`. Proven three ways against a real running server in `tests/e2e_airdrop_anchors_test.go`: fuzzy-extractor-selfie alone passes with a real nullifier; social-vouching-graph alone correctly fails `anchor_missing`; both together on one credential compose and pass. |
-| **Google Cloud deploy (Cloud Run + Firebase Hosting)** | `scripts/deploy-cloudrun.sh`, `scripts/deploy-web-firebase.sh`, `scripts/e2e-remote.sh`, `.gcloudignore` | **Round-6 (PRs #41/#42/#43).** The live round-1 deployment: issuer on Cloud Run (source build, `--max-instances 1` since sessions are in-memory with no Redis wired up here), web app as a static Next.js export on Firebase Hosting. Issuer key lives only in Secret Manager, never in git. `scripts/deploy-cloudrun.sh` / `scripts/deploy-web-firebase.sh` are idempotent, parameterized wrappers around the exact `gcloud`/`firebase` commands run tonight (never overwrite an existing signing-key secret); `scripts/e2e-remote.sh` re-proves enroll → issue → verify against a live remote issuer. See `RUNBOOK.md`'s "§6-alt / §7-alt" section for the full command reference, the `/healthz`-vs-`/health` Cloud Run gotcha, and how to turn test mode off. |
+| **Google Cloud deploy (Cloud Run + Firebase Hosting)** | `scripts/deploy-cloudrun.sh`, `scripts/deploy-web-firebase.sh`, `scripts/e2e-remote.sh`, `.gcloudignore` | **Round-6 (PRs #41/#42/#43), updated round-7.** The live deployment: issuer on Cloud Run (source build), web app as a static Next.js export on Firebase Hosting. Issuer key lives only in Secret Manager, never in git. `scripts/deploy-cloudrun.sh` / `scripts/deploy-web-firebase.sh` are idempotent, parameterized wrappers around the exact `gcloud`/`firebase` commands (never overwrite an existing signing-key secret); `scripts/e2e-remote.sh` re-proves enroll → issue → verify against a live remote issuer. As of round-7 `deploy-cloudrun.sh` accepts `FIRESTORE_PROJECT_ID` (enables `firestore.googleapis.com` + grants `roles/datastore.user`) and the live deployment runs with it set, so `--max-instances 1` is now a cost knob rather than a correctness requirement — see the Firestore-backed stores row above. See `RUNBOOK.md`'s "§6-alt / §7-alt" section for the full command reference, the `/healthz`-vs-`/health` Cloud Run gotcha, and how to turn test mode off. |
+| **Firestore-backed stores** | `pkg/firestoreclient/`, `src/server/session_firestore.go`, `src/methods/{email,sms,government-id-liveness}/store_firestore.go` | **Round-7.** Hand-rolled, dependency-free Firestore REST client (`pkg/firestoreclient` — same philosophy as `pkg/redisclient`: no `cloud.google.com/go/firestore` grpc/protobuf tree; OAuth2 access token from the Cloud Run/GCE metadata server, or unauthenticated against `FIRESTORE_EMULATOR_HOST`). `SessionStore`, `email.TokenStore`, `sms.OTPStore`, and `government-id-liveness.ResultStore` each gained a Firestore-backed implementation selected via `FIRESTORE_PROJECT_ID` (`NewSessionStoreFromEnv` / `*.NewTokenStoreFromEnv` / `*.NewOTPStoreFromEnv` / `*.NewResultStoreFromEnv`), which takes priority over `REDIS_URL` when both are set; in-memory remains the default when neither is set. Verified against a real Firestore emulator (`firebase emulators:exec --only firestore`, needs Java 21+) — unit + integration tests for all four stores, `-race` green — and against production: a session created and email-verified against one Cloud Run revision was resumed and issued a credential from a freshly deployed revision (a real container restart), proving the round-6 in-memory-loses-state-on-restart limitation is fixed for deployments that set `FIRESTORE_PROJECT_ID`. |
 | **`/v1/config` + invite gate** | `src/server/handlers.go`, `src/server/config.go` | New public `GET /v1/config` endpoint reports `{invite_code_required, challenge_secrets_exposed, email_delivery}` so a client can decide whether to prompt for an invite code and whether to warn that magic links are shown on screen rather than emailed — never leaks the code itself. `ENROLLMENT_INVITE_CODE` (env), when set, requires a matching `invite_code` field on `POST /enrollment/start` (constant-time compare; `403 invite_code_required` / `403 invite_code_invalid` otherwise). This is what makes `DEV_EXPOSE_CHALLENGE_SECRETS=1` safe enough for a small trusted cohort in production — see `config_endpoint_test.go`. |
 
 ### What's stub

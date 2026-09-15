@@ -26,5 +26,14 @@
         "headers": [{ "key": "Content-Type", "value": "application/manifest+json" }]
       }
     ]
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "database": "(default)"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8090
+    }
   }
 }

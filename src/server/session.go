@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sagearbor/personhood/pkg/firestoreclient"
 	"github.com/sagearbor/personhood/pkg/redisclient"
 	"github.com/sagearbor/personhood/pkg/types"
 )
@@ -81,13 +82,24 @@ type SessionView struct {
 	IssuedCredentialID string                 `json:"issued_credential_id,omitempty"`
 }
 
-// NewSessionStoreFromEnv returns a RedisSessionStore when REDIS_URL is set,
-// or an InMemorySessionStore (the default) otherwise. This mirrors the
-// env-aware factory pattern already used for delivery (email.NewSenderFromEnv,
-// sms.NewSenderFromEnv): the in-memory backend needs no configuration and
-// stays the default so existing single-process deployments (including
-// round-1) are unaffected; setting REDIS_URL is opt-in.
+// NewSessionStoreFromEnv returns a FirestoreSessionStore when
+// FIRESTORE_PROJECT_ID is set, a RedisSessionStore when REDIS_URL is set (and
+// FIRESTORE_PROJECT_ID is not), or an InMemorySessionStore (the default)
+// otherwise. This mirrors the env-aware factory pattern already used for
+// delivery (email.NewSenderFromEnv, sms.NewSenderFromEnv): the in-memory
+// backend needs no configuration and stays the default so existing
+// single-process deployments (including round-1) are unaffected; setting
+// either FIRESTORE_PROJECT_ID or REDIS_URL is opt-in. FIRESTORE_PROJECT_ID
+// takes priority when both are set — a deployment migrating from Redis to
+// Firestore should not have to unset REDIS_URL first.
 func NewSessionStoreFromEnv(ttl time.Duration) (SessionStore, error) {
+	if projectID := os.Getenv("FIRESTORE_PROJECT_ID"); projectID != "" {
+		client, err := firestoreclient.New(projectID)
+		if err != nil {
+			return nil, fmt.Errorf("server: FIRESTORE_PROJECT_ID: %w", err)
+		}
+		return NewFirestoreSessionStore(client, ttl), nil
+	}
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
 		return NewInMemorySessionStore(ttl), nil
