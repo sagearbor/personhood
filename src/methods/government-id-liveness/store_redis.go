@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sagearbor/personhood/pkg/firestoreclient"
 	"github.com/sagearbor/personhood/pkg/redisclient"
 )
 
@@ -35,9 +36,18 @@ func NewRedisResultStore(client *redisclient.Client) *RedisResultStore {
 	return &RedisResultStore{client: client}
 }
 
-// NewResultStoreFromEnv returns a RedisResultStore when REDIS_URL is set, or
-// an InMemoryStore (the default) otherwise.
+// NewResultStoreFromEnv returns a FirestoreResultStore when
+// FIRESTORE_PROJECT_ID is set, a RedisResultStore when REDIS_URL is set (and
+// FIRESTORE_PROJECT_ID is not), or an InMemoryStore (the default) otherwise.
+// FIRESTORE_PROJECT_ID takes priority when both are set.
 func NewResultStoreFromEnv() (ResultStore, error) {
+	if projectID := os.Getenv("FIRESTORE_PROJECT_ID"); projectID != "" {
+		client, err := firestoreclient.New(projectID)
+		if err != nil {
+			return nil, fmt.Errorf("government-id-liveness: FIRESTORE_PROJECT_ID: %w", err)
+		}
+		return NewFirestoreResultStore(client), nil
+	}
 	redisURL := os.Getenv("REDIS_URL")
 	if redisURL == "" {
 		return NewInMemoryStore(), nil

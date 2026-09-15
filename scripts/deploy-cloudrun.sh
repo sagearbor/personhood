@@ -27,15 +27,26 @@
 #                                   deliberately NOT forwarded by this script -- store it in
 #                                   Secret Manager and wire it with --set-secrets by hand
 #                                   (see RUNBOOK.md, "turn test mode off").
+#   FIRESTORE_PROJECT_ID            when set, enables the Firestore-backed SessionStore /
+#                                   email.TokenStore / sms.OTPStore / government-id-liveness
+#                                   ResultStore (pkg/firestoreclient) instead of the in-memory
+#                                   defaults, so state survives restarts and new revisions.
+#                                   Usually just PROJECT itself (they share one GCP project's
+#                                   free-tier Firestore Native "(default)" database). Enables
+#                                   firestore.googleapis.com and grants the compute service
+#                                   account roles/datastore.user. Falls back to REDIS_URL
+#                                   (unaffected by this script) or in-memory if unset.
 #
 # What this does, in order, and why it is safe to re-run:
 #   1. gcloud config set project
-#   2. enable secretmanager / run / cloudbuild APIs (no-op if already on)
+#   2. enable secretmanager / run / cloudbuild APIs (no-op if already on); also
+#      firestore.googleapis.com when FIRESTORE_PROJECT_ID is set
 #   3. create the issuer-key secret from `gen-key` ONLY if it does not already
 #      exist. It NEVER overwrites an existing key -- rotating it invalidates
 #      every credential issued so far -- and instead prints the command to
 #      read the existing key for a backup.
-#   4. grant the default compute service account secretAccessor on it
+#   4. grant the default compute service account secretAccessor on it, and
+#      (when FIRESTORE_PROJECT_ID is set) roles/datastore.user on the project
 #      (idempotent: add-iam-policy-binding is a no-op if already granted)
 #   5. gcloud run deploy --source .
 #   6. smoke-test /health, /v1/methods, /.well-known/did.json and print the
@@ -58,6 +69,8 @@ Optional env:
   DEV_EXPOSE_CHALLENGE_SECRETS    default: 1 (test mode). Set to 0 once SMTP is configured.
   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_FROM   optional real email delivery config.
                                    SMTP_PASS is never forwarded by this script.
+  FIRESTORE_PROJECT_ID             when set, enables the Firestore-backed stores instead of
+                                   in-memory (falls back to REDIS_URL, then in-memory).
 
 This script mutates the live Cloud Run service. Re-running it is safe (idempotent) but it
 DOES deploy a new revision every time -- it is not a dry run.
@@ -90,8 +103,9 @@ echo "==> gcloud config set project $PROJECT"
 gcloud config set project "$PROJECT" >/dev/null
 
 echo "==> enabling APIs (no-op if already on)"
-gcloud services enable secretmanager.googleapis.com run.googleapis.com cloudbuild.googleapis.com \
-  --project "$PROJECT"
+APIS="secretmanager.googleapis.com run.googleapis.com cloudbuild.googleapis.com"
+[[ -n "${FIRESTORE_PROJECT_ID:-}" ]] && APIS="$APIS firestore.googleapis.com"
+gcloud services enable $APIS --project "$PROJECT"
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
 [[ -n "$PROJECT_NUMBER" ]] || { echo "error: could not resolve project number for $PROJECT" >&2; exit 1; }
@@ -121,6 +135,13 @@ gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
   --member="serviceAccount:${COMPUTE_SA}" \
   --role="roles/secretmanager.secretAccessor" >/dev/null
 
+if [[ -n "${FIRESTORE_PROJECT_ID:-}" ]]; then
+  echo "==> granting roles/datastore.user to $COMPUTE_SA (Firestore project $FIRESTORE_PROJECT_ID)"
+  gcloud projects add-iam-policy-binding "$FIRESTORE_PROJECT_ID" \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="roles/datastore.user" >/dev/null
+fi
+
 ENV_VARS="SERVER_PUBLIC_URL=${SERVER_PUBLIC_URL},CORS_ALLOWED_ORIGINS=${WEB_ORIGIN}"
 if [[ -n "$DEV_EXPOSE_CHALLENGE_SECRETS" && "$DEV_EXPOSE_CHALLENGE_SECRETS" != "0" ]]; then
   ENV_VARS="${ENV_VARS},DEV_EXPOSE_CHALLENGE_SECRETS=${DEV_EXPOSE_CHALLENGE_SECRETS}"
@@ -137,6 +158,9 @@ if [[ -n "${SMTP_HOST:-}" && -n "${SMTP_FROM:-}" ]]; then
     echo "      store it in Secret Manager and attach it with --set-secrets by hand; see" >&2
     echo "      RUNBOOK.md's Google Cloud section, 'turn test mode off'." >&2
   fi
+fi
+if [[ -n "${FIRESTORE_PROJECT_ID:-}" ]]; then
+  ENV_VARS="${ENV_VARS},FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT_ID}"
 fi
 
 echo "==> deploying $SERVICE to $REGION (source build)"

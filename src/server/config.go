@@ -10,12 +10,13 @@
 // across goroutines; net/http calls into Server's handlers concurrently.
 //
 // The v0.1 reference deployment is single-process and in-memory by default:
-// sessions and method-store state vanish on restart. Set REDIS_URL to swap
-// SessionStore, email.TokenStore, sms.OTPStore, and
-// government-id-liveness's ResultStore for Redis-backed implementations
-// (see NewSessionStoreFromEnv / *.NewTokenStoreFromEnv /
+// sessions and method-store state vanish on restart. Set FIRESTORE_PROJECT_ID
+// or REDIS_URL to swap SessionStore, email.TokenStore, sms.OTPStore, and
+// government-id-liveness's ResultStore for Firestore- or Redis-backed
+// implementations (see NewSessionStoreFromEnv / *.NewTokenStoreFromEnv /
 // *.NewOTPStoreFromEnv / *.NewResultStoreFromEnv) so sessions survive
 // restarts and are shared across horizontally scaled replicas.
+// FIRESTORE_PROJECT_ID takes priority when both are set.
 package server
 
 import (
