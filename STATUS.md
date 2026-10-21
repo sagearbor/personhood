@@ -13,7 +13,9 @@ credential → use it at OpenLine). The invite gate and test mode stay ON until
 the owner picks launch day. The hub-facing readiness list lives in
 `tmp/launch/readiness.yaml` (gitignored); launch-day steps are in
 `docs/LAUNCH-RUNBOOK.md`. Live issuer revision after this round:
-`personhood-issuer-00005-8n4`.
+`personhood-issuer-00007-jb7` (00005 shipped the hardening; 00006 was the
+openline session's hand-added wallet CORS origin; 00007 redeployed both
+origins through the fixed script, #51).
 
 **Waiting on the owner** (not done; each needs a yes): turning off test mode
 and the invite gate (runbook §2); Firestore TTL deletion of expired records
