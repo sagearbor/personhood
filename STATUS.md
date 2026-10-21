@@ -8,8 +8,25 @@
 
 ## Round-9 session summary (2026-10-21)
 
+Live issuer revision after this round: `personhood-issuer-00011-fs5` (same
+signing key; invite gate and test mode still ON). A self-run security review
+found the ip-asn hole below; everything it confirmed is fixed except the
+low-severity issue race and the per-email uniqueness gap, which is an owner
+decision (it changes what OpenLine deduplicates on).
+
+**Waiting on the owner (new this round):** a per-email nullifier, so one
+inbox counts as one voter (today one inbox can enroll again and again);
+how the live e2e works once test mode is off (a test-mode tagged revision
+would be a standing backdoor, so it was not built); Next.js 14 → 16 (npm
+audit flags 14.2.35; the app is a static export, which limits exposure).
+
 | Change | Path | What works |
 |---|---|---|
+| **Security: ip-asn alone no longer passes round1** | `src/server/server.go`, `handlers.go`, `docs/policies/round1-email.yaml` (#55) | ip-asn-reputation read the IP to judge from the client's payload, and its static provider calls every IP clean, so start → ip-asn complete → issue gave 10 points, which passed round1-email with no email. The method is now opt-in (`IP_ASN_REPUTATION=static`); when on, the server fills in the caller's real IP; round1-email allows only `email`. Verified live: `/v1/methods` lists email and sms only. OpenLine's copy of the policy was updated to match (openline#105). |
+| **Status-list bit order** | `src/credential/status.go`, `sdk/typescript/src/statuslist.ts` (#57) | MSB-first within each byte, as W3C Bitstring Status List §2.2 requires (index 0 is the left-most bit). It was LSB-first, so a standards-compliant verifier would read the wrong credential's bit. Revoked indices are stored, not bits, so no data migration was needed. |
+| **Rate limiter and session ids** | `src/server/ratelimit.go`, `session*.go` (#58) | IPv6 is keyed per /64. The bucket map is capped at 100k (new clients get 429 beyond that). Session stores reject ids that aren't 43 base64url characters before calling Firestore/Redis. |
+| **Accessibility scan** | `scripts/phone-check.mjs`, `app/web/app/layout.tsx` (#54) | The phone check runs axe-core (WCAG 2.x A/AA) on every step when `AXE` is set (CI pins axe-core 4.14.0); serious/critical violations fail. The first scan found pinch-zoom disabled (`maximumScale: 1`); removed. |
+| **Dependencies** | (#56) | chi v5.2.5, web `@types/*`, TypeScript 5.6.3. json-canonicalization stays at its 2024-12 commit, because the newer commit was 10 days old and sits on the signing path. |
 | **Real revocation** | `src/server/revocation.go`, `pkg/firestoreclient` (`Create`) | Every issued credential now carries a `credentialStatus` entry pointing at a **random** slot in `/v1/status-list/default` (random so slot numbers don't reveal issuance order). Slots are claimed with a create-only Firestore write, so two credentials never share one. `POST /v1/admin/revoke {"credential_id"}` with `Authorization: Bearer $ADMIN_TOKEN` sets the bit; the route is unmounted (404) without a token, and it shares the 6/min start bucket. The list is cached 30s, so a revocation reaches verifiers within about a minute. `GET /.well-known/did.json` and the status list are exempt from rate limiting, because OpenLine's node fetches them on every vote from one IP and fails closed. The list is still unsigned (v0.2). `deploy-cloudrun.sh` attaches the `personhood-admin-token` secret when it exists, and `e2e-remote.sh` revokes its own credential and expects `revoked` when `PERSONHOOD_ADMIN_TOKEN` is set. Credentials issued before this change have no status entry and can't be revoked. |
 
 ## Round-8 session summary (2026-10-20, launch hardening)
