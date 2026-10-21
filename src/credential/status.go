@@ -15,11 +15,15 @@ import (
 )
 
 // BitString wraps the decoded bytes of a W3C Status List 2021 bitstring.
-// Bits are addressed least-significant-bit-first within each byte, matching
-// the W3C Status List 2021 spec (https://www.w3.org/TR/vc-status-list/).
+// Bits are addressed most-significant-bit-first within each byte: "the first
+// index, with a value of zero (0), is located at the left-most bit in the
+// bitstring" (W3C Bitstring Status List, §2.2,
+// https://www.w3.org/TR/vc-bitstring-status-list/).
 //
-// Bit 0 lives in byte[0] & 0x01; bit 7 lives in byte[0] & 0x80; bit 8 lives
-// in byte[1] & 0x01; and so on.
+// Bit 0 lives in byte[0] & 0x80; bit 7 lives in byte[0] & 0x01; bit 8 lives
+// in byte[1] & 0x80; and so on. (Before 2026-10-21 this package used the
+// reverse order within each byte, which a standards-compliant verifier
+// would read as the wrong credential.)
 type BitString struct {
 	bytes []byte
 }
@@ -59,8 +63,7 @@ func (b BitString) Get(i int) bool {
 	if byteIdx >= len(b.bytes) {
 		return false
 	}
-	bitIdx := uint(i % 8)
-	return (b.bytes[byteIdx]>>bitIdx)&0x01 == 1
+	return b.bytes[byteIdx]&(0x80>>uint(i%8)) != 0
 }
 
 // Set sets bit i. Returns an error if i is out of range.
@@ -72,8 +75,7 @@ func (b *BitString) Set(i int) error {
 	if byteIdx >= len(b.bytes) {
 		return fmt.Errorf("BitString.Set: index %d out of range (len %d bits)", i, b.BitLen())
 	}
-	bitIdx := uint(i % 8)
-	b.bytes[byteIdx] |= 1 << bitIdx
+	b.bytes[byteIdx] |= 0x80 >> uint(i%8)
 	return nil
 }
 

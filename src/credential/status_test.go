@@ -285,3 +285,20 @@ func TestFetchStatusList_RespectsContext(t *testing.T) {
 		t.Error("expected error from cancelled context")
 	}
 }
+
+// Index 0 is the left-most bit of the first byte (W3C Bitstring Status List
+// §2.2). Pinning the byte layout keeps us interoperable with other verifiers.
+func TestBitString_MSBFirstLayout(t *testing.T) {
+	b := NewBitString(16)
+	for _, i := range []int{0, 7, 9} {
+		if err := b.Set(i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := b.Bytes(); got[0] != 0x81 || got[1] != 0x40 {
+		t.Fatalf("bytes = %#x %#x, want 0x81 0x40", got[0], got[1])
+	}
+	if !FromBytes([]byte{0x80}).Get(0) || FromBytes([]byte{0x01}).Get(0) {
+		t.Fatal("Get(0) must read the most significant bit of byte 0")
+	}
+}
