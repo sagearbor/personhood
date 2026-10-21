@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"log"
+	"strings"
 )
 
 // Sender is the abstraction the Email method uses to deliver a magic-link
@@ -25,6 +26,9 @@ type Sender interface {
 // logger instead of actually sending an email. It is intentionally trivial so
 // developers can copy the link out of stdout during local testing.
 //
+// The recipient is masked (a***@example.com): server logs outlive the
+// session by weeks, and the link alone is enough to finish a dev ceremony.
+//
 // If Logger is nil, log.Default() is used.
 type LogSender struct {
 	Logger *log.Logger
@@ -36,8 +40,20 @@ func (s *LogSender) Send(_ context.Context, to string, subject string, magicLink
 	if logger == nil {
 		logger = log.Default()
 	}
-	logger.Printf("[email/LogSender] to=%s subject=%q link=%s", to, subject, magicLinkURL)
+	logger.Printf("[email/LogSender] to=%s subject=%q link=%s", MaskEmail(to), subject, magicLinkURL)
 	return nil
+}
+
+// MaskEmail keeps the first character of the local part and the whole
+// domain: "alice@example.com" -> "a***@example.com". Enough to tell test
+// addresses apart in a log, not enough to recover the address.
+func MaskEmail(addr string) string {
+	local, domain, ok := strings.Cut(strings.TrimSpace(addr), "@")
+	if !ok || local == "" {
+		return "***"
+	}
+	r := []rune(local)
+	return string(r[0]) + "***@" + domain
 }
 
 // SenderKindLog / SenderKindSMTP / SenderKindSendGrid are the stable string

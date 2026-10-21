@@ -165,6 +165,9 @@ func TestConfigEndpoint_ReflectsConfig(t *testing.T) {
 			if got.EmailDelivery != tc.wantDelivery {
 				t.Errorf("email_delivery = %q, want %q", got.EmailDelivery, tc.wantDelivery)
 			}
+			if got.SMSDelivery != SMSDeliveryUnknown {
+				t.Errorf("sms_delivery = %q, want %q when deps leave it unset", got.SMSDelivery, SMSDeliveryUnknown)
+			}
 		})
 	}
 }

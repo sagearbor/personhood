@@ -103,6 +103,11 @@ type serverConfigResponse struct {
 	// EmailDelivery names the email backend the server selected at startup:
 	// "log", "smtp", "sendgrid", or "unknown" (a custom/injected Sender).
 	EmailDelivery string `json:"email_delivery"`
+
+	// SMSDelivery is the same for SMS: "log" (codes go only to the server
+	// log — a phone number entered here receives nothing), "twilio", or
+	// "unknown". The web app hides the SMS step when it is "log".
+	SMSDelivery string `json:"sms_delivery"`
 }
 
 // issueCredentialRequest is the JSON body of POST /v1/credentials/issue.
@@ -133,6 +138,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		InviteCodeRequired:      s.cfg.EnrollmentInviteCode != "",
 		ChallengeSecretsExposed: s.cfg.ExposeChallengeSecrets,
 		EmailDelivery:           s.emailDelivery,
+		SMSDelivery:             s.smsDelivery,
 	})
 }
 
