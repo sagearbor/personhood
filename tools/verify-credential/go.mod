@@ -8,7 +8,7 @@ require (
 )
 
 require (
-	github.com/cyberphone/json-canonicalization v0.0.0-20261011152517-32a48195b9b2 // indirect
+	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/sagearbor/personhood/src/credential v0.0.0-00010101000000-000000000000 // indirect
 	github.com/sagearbor/personhood/src/policy v0.0.0-00010101000000-000000000000 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
