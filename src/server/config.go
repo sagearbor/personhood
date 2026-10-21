@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -86,6 +87,11 @@ type Config struct {
 	//
 	// Env: ENROLLMENT_INVITE_CODE. Never logged; compared in constant time.
 	EnrollmentInviteCode string
+
+	// RateLimit bounds per-client request rates (see RateLimitConfig). The
+	// zero value disables it; LoadConfigFromEnv enables
+	// DefaultRateLimitConfig unless RATE_LIMIT=off.
+	RateLimit RateLimitConfig
 }
 
 // LoadConfigFromEnv reads the canonical environment variables documented in
@@ -107,6 +113,10 @@ type Config struct {
 //     body; GET /v1/config advertises that the gate is on (but never the
 //     code). Pair it with DEV_EXPOSE_CHALLENGE_SECRETS on any deployment
 //     that has a public URL but no mail credential yet.
+//   - RATE_LIMIT                   default on (DefaultRateLimitConfig);
+//     "off" disables per-client rate limiting (load tests only).
+//   - TRUSTED_PROXY_HOPS           default 0. Set 1 behind Cloud Run so the
+//     rate limiter keys on the real client IP (see RateLimitConfig).
 func LoadConfigFromEnv() (Config, error) {
 	cfg := Config{
 		Addr:                   firstNonEmpty(os.Getenv("SERVER_ADDR"), ":8080"),
@@ -123,6 +133,17 @@ func LoadConfigFromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("SESSION_TTL_MINUTES: %w", err)
 		}
 		cfg.SessionTTL = mins
+	}
+
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("RATE_LIMIT")), "off") {
+		cfg.RateLimit = DefaultRateLimitConfig()
+	}
+	if h := strings.TrimSpace(os.Getenv("TRUSTED_PROXY_HOPS")); h != "" {
+		n, err := strconv.Atoi(h)
+		if err != nil || n < 0 {
+			return Config{}, fmt.Errorf("TRUSTED_PROXY_HOPS: want a non-negative integer, got %q", h)
+		}
+		cfg.RateLimit.TrustedProxyHops = n
 	}
 
 	skB64 := os.Getenv("ISSUER_ED25519_SK_B64")

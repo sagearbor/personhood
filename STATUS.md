@@ -6,6 +6,19 @@
 
 ---
 
+## Round-8 session summary (2026-10-20, launch hardening — in progress)
+
+Launch-blocker pass, walking the path a phone user takes (enroll → verify →
+credential → use it at OpenLine). The invite gate and test mode stay ON until
+the owner picks launch day. The hub-facing readiness list lives in
+`tmp/launch/readiness.yaml` (gitignored).
+
+| Change | Path | What works |
+|---|---|---|
+| **Per-client rate limiting** | `src/server/ratelimit.go` | Token bucket per client IP, three classes: `POST /enrollment/start` (6/min), `POST /v1/methods/{id}/begin` (6/min, burst 4 — this is the one that sends mail/SMS), everything else (120/min, burst 60, sized for session polling). `/health` is never limited. 429 + `Retry-After` + `{"error":{"code":"rate_limited"}}`. On by default from env (`RATE_LIMIT=off` disables it); Cloud Run sets `TRUSTED_PROXY_HOPS=1` so the key is the rightmost `X-Forwarded-For` entry, which the client can't forge. In-memory buckets are per instance, which is correct while `--max-instances 1`. |
+| **Request body cap** | `src/server/ratelimit.go` (`limitBody`) | 256 KiB per request body via `http.MaxBytesReader`; larger bodies get 400. |
+| **Deny-all Firestore rules** | `firestore.rules`, `pkg/firestoreclient` | `firebase.json` points the shared production `(default)` database at `firestore.rules`, which used to be allow-all, so a bare `firebase deploy` would have opened every personhood document to the internet. Rules are now deny-all (the issuer's service-account token bypasses rules), and the emulator client authenticates as `Bearer owner` so the emulator tests still pass under deny-all. No rules release exists on `arborfam-hub` today, which means clients are already denied there. |
+
 ## Round-7 session summary (2026-09-15, overnight)
 
 **The live deployment's state now survives restarts.** Added

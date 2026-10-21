@@ -59,9 +59,9 @@ type Client struct {
 // New constructs a Client for projectID.
 //
 // If the FIRESTORE_EMULATOR_HOST env var is set, requests go to the
-// emulator over plain HTTP with no auth. Otherwise requests go to the real
-// Firestore REST API over HTTPS with an OAuth2 access token fetched from the
-// GCE/Cloud Run metadata server — the Cloud Run service's runtime service
+// emulator over plain HTTP as the emulator's admin ("Bearer owner").
+// Otherwise requests go to the real Firestore REST API over HTTPS with an
+// OAuth2 access token fetched from the GCE/Cloud Run metadata server — the Cloud Run service's runtime service
 // account needs the `roles/datastore.user` IAM role for this to succeed
 // (see scripts/deploy-cloudrun.sh).
 func New(projectID string) (*Client, error) {
@@ -152,6 +152,10 @@ func (c *Client) accessToken(ctx context.Context) (string, error) {
 
 func (c *Client) setAuth(ctx context.Context, req *http.Request) error {
 	if c.emulator {
+		// "owner" is the emulator's admin credential: it bypasses Security
+		// Rules the way the service-account token does in production, so
+		// firestore.rules can stay deny-all.
+		req.Header.Set("Authorization", "Bearer owner")
 		return nil
 	}
 	tok, err := c.accessToken(ctx)

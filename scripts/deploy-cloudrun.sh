@@ -142,7 +142,9 @@ if [[ -n "${FIRESTORE_PROJECT_ID:-}" ]]; then
     --role="roles/datastore.user" >/dev/null
 fi
 
-ENV_VARS="SERVER_PUBLIC_URL=${SERVER_PUBLIC_URL},CORS_ALLOWED_ORIGINS=${WEB_ORIGIN}"
+# TRUSTED_PROXY_HOPS=1: Cloud Run's frontend appends the real client IP to
+# X-Forwarded-For, so the issuer's rate limiter keys on the rightmost entry.
+ENV_VARS="SERVER_PUBLIC_URL=${SERVER_PUBLIC_URL},CORS_ALLOWED_ORIGINS=${WEB_ORIGIN},TRUSTED_PROXY_HOPS=1"
 if [[ -n "$DEV_EXPOSE_CHALLENGE_SECRETS" && "$DEV_EXPOSE_CHALLENGE_SECRETS" != "0" ]]; then
   ENV_VARS="${ENV_VARS},DEV_EXPOSE_CHALLENGE_SECRETS=${DEV_EXPOSE_CHALLENGE_SECRETS}"
 fi

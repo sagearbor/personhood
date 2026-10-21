@@ -31,6 +31,10 @@ func (s *Server) Router() http.Handler {
 	r.Use(requestLogger)
 	r.Use(s.corsMiddleware)
 	r.Use(recoverer)
+	r.Use(limitBody)
+	if s.cfg.RateLimit.Enabled {
+		r.Use(newRateLimiter(s.cfg.RateLimit, nil).middleware)
+	}
 
 	r.Get("/healthz", s.handleHealth)
 	// /health is an alias: Google's frontend intercepts /healthz on *.run.app
