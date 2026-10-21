@@ -3,7 +3,8 @@
 // cloud.google.com/go/firestore SDK) supporting exactly the operations the
 // personhood session/token stores need: get one document, upsert one
 // document (as a single opaque bytes blob plus an optional expiry
-// timestamp), and delete one document.
+// timestamp), create one document only if it is absent, and delete one
+// document.
 //
 // Hand-rolled deliberately, for the same reason pkg/redisclient is: every
 // vendor integration elsewhere in this repo (SendGrid, Twilio, Persona,
@@ -256,6 +257,42 @@ func (c *Client) Set(ctx context.Context, collection, id string, data []byte, tt
 		return fmt.Errorf("firestoreclient: set %s/%s: status %d: %s", collection, id, resp.StatusCode, respBody)
 	}
 	return nil
+}
+
+// Create stores data under (collection, id) only if no such document exists
+// yet. It reports created=false (and no error) when the id is already taken,
+// so callers can claim unique ids (e.g. a status-list index) without a
+// transaction. Create never sets an expiry.
+func (c *Client) Create(ctx context.Context, collection, id string, data []byte) (created bool, err error) {
+	body, err := json.Marshal(fsDocument{Fields: map[string]fsValue{
+		"blob": {BytesValue: base64.StdEncoding.EncodeToString(data)},
+	}})
+	if err != nil {
+		return false, fmt.Errorf("firestoreclient: marshal document: %w", err)
+	}
+	u := fmt.Sprintf("%s/projects/%s/databases/(default)/documents/%s?documentId=%s",
+		c.baseURL, url.PathEscape(c.projectID), url.PathEscape(collection), url.QueryEscape(id))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("firestoreclient: build create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if err := c.setAuth(ctx, req); err != nil {
+		return false, err
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("firestoreclient: create %s/%s: %w", collection, id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return false, nil
+	}
+	if resp.StatusCode/100 != 2 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("firestoreclient: create %s/%s: status %d: %s", collection, id, resp.StatusCode, respBody)
+	}
+	return true, nil
 }
 
 // Del deletes (collection, id). A missing document is not an error —

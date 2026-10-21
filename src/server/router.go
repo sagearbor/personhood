@@ -67,6 +67,9 @@ func (s *Server) Router() http.Handler {
 
 		r.Post("/credentials/issue", s.handleIssueCredential)
 		r.Get("/status-list/{listId}", s.handleStatusList)
+		if s.cfg.AdminToken != "" {
+			r.Post("/admin/revoke", s.handleAdminRevoke)
+		}
 
 		// Method-owned routes (e.g. third-party webhook receivers). Mounted
 		// under /v1/methods/{id}/{path}. Added at build time by

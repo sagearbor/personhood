@@ -149,8 +149,16 @@ func classify(r *http.Request) (rateClass, bool) {
 	if p == "/health" || p == "/healthz" || r.Method == http.MethodOptions {
 		return 0, false
 	}
+	// Verifiers (OpenLine's node) fetch the DID document and status list
+	// on every check, all from one IP, and fail closed on an error, so a
+	// 429 here would turn into a refused vote. Both are cheap reads.
+	if r.Method == http.MethodGet && (p == "/.well-known/did.json" || strings.HasPrefix(p, "/v1/status-list/")) {
+		return 0, false
+	}
 	if r.Method == http.MethodPost {
-		if p == "/enrollment/start" {
+		// Admin calls share the start bucket so a wrong token can't be
+		// guessed quickly.
+		if p == "/enrollment/start" || p == "/v1/admin/revoke" {
 			return classStart, true
 		}
 		if strings.HasPrefix(p, "/v1/methods/") && strings.HasSuffix(p, "/begin") {

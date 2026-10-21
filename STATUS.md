@@ -6,6 +6,12 @@
 
 ---
 
+## Round-9 session summary (2026-10-21)
+
+| Change | Path | What works |
+|---|---|---|
+| **Real revocation** | `src/server/revocation.go`, `pkg/firestoreclient` (`Create`) | Every issued credential now carries a `credentialStatus` entry pointing at a **random** slot in `/v1/status-list/default` (random so slot numbers don't reveal issuance order). Slots are claimed with a create-only Firestore write, so two credentials never share one. `POST /v1/admin/revoke {"credential_id"}` with `Authorization: Bearer $ADMIN_TOKEN` sets the bit; the route is unmounted (404) without a token, and it shares the 6/min start bucket. The list is cached 30s, so a revocation reaches verifiers within about a minute. `GET /.well-known/did.json` and the status list are exempt from rate limiting, because OpenLine's node fetches them on every vote from one IP and fails closed. The list is still unsigned (v0.2). `deploy-cloudrun.sh` attaches the `personhood-admin-token` secret when it exists, and `e2e-remote.sh` revokes its own credential and expects `revoked` when `PERSONHOOD_ADMIN_TOKEN` is set. Credentials issued before this change have no status entry and can't be revoked. |
+
 ## Round-8 session summary (2026-10-20, launch hardening)
 
 Launch-blocker pass, walking the path a phone user takes (enroll → verify →
