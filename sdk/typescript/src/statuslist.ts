@@ -1,6 +1,7 @@
 // W3C Status List 2021 revocation checking. Mirrors the Go src/credential
 // status.go: base64url-decode + gunzip the encodedList, then read the bit at
-// statusListIndex (least-significant-bit-first within each byte).
+// statusListIndex (most-significant-bit-first within each byte: index 0 is
+// the left-most bit, per W3C Bitstring Status List §2.2).
 
 import { base64urlToBytes } from "./crypto.js";
 import type { PersonhoodCredential } from "./types.js";
@@ -15,13 +16,12 @@ async function gunzip(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(buf);
 }
 
-/** Returns true iff bit i is set, LSB-first within each byte. */
+/** Returns true iff bit i is set, MSB-first within each byte. */
 function bitSet(bytes: Uint8Array, i: number): boolean {
   if (i < 0) return false;
   const byteIdx = Math.floor(i / 8);
   if (byteIdx >= bytes.length) return false;
-  const bitIdx = i % 8;
-  return ((bytes[byteIdx]! >> bitIdx) & 0x01) === 1;
+  return (bytes[byteIdx]! & (0x80 >> (i % 8))) !== 0;
 }
 
 export type FetchLike = (url: string) => Promise<Response>;
