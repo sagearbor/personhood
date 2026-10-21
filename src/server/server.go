@@ -353,12 +353,16 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 	// None of these has a webhook (they're synchronous begin/complete), so no
 	// MethodRoutes are added.
 
-	// ip-asn-reputation: always-on with a default (clean) provider so the floor
-	// signal is present out of the box. Production swaps in a real provider
-	// (MaxMind / IPQualityScore) via the ReputationProvider interface.
-	ipasn := ipasnmethod.NewMethod(ipasnmethod.DefaultConfig(ipasnmethod.NewStaticProvider(nil)))
-	if err := reg.Register(ipasn); err != nil {
-		return Dependencies{}, fmt.Errorf("register ip-asn-reputation: %w", err)
+	// ip-asn-reputation: opt-in (IP_ASN_REPUTATION=static) until a real
+	// provider (MaxMind / IPQualityScore) is wired. The only provider today is
+	// the static one, which calls every IP clean, so the method would hand out
+	// 10 supplementary points to anyone who calls complete, which is more than
+	// round1-email's whole 8-point bar, with no email at all. Off by default.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("IP_ASN_REPUTATION")), "static") {
+		ipasn := ipasnmethod.NewMethod(ipasnmethod.DefaultConfig(ipasnmethod.NewStaticProvider(nil)))
+		if err := reg.Register(ipasn); err != nil {
+			return Dependencies{}, fmt.Errorf("register ip-asn-reputation: %w", err)
+		}
 	}
 
 	// captcha-turnstile: registered when Cloudflare Turnstile keys are present.

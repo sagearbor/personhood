@@ -24,10 +24,12 @@ action: "Round-1 plumbing check (email inbox control only)"
 # No anchor is registered in round 1.
 anchor_required: false
 
-# email = 8 points. ip-asn-reputation (10) is registered always-on but the
-# reference web app does not run its ceremony yet, so require only email.
+# email = 8 points, and email is the only method that counts. ip-asn-
+# reputation used to be allowed here too, but with its static always-clean
+# provider it was worth 10 points for nothing, so a credential with no email
+# passed. The issuer no longer registers it by default either.
 min_supplementary_points: 8
-allowed_methods: ["email", "ip-asn-reputation"]
+allowed_methods: ["email"]
 
 # The email method's own freshness lifetime is 90 days; the credential itself
 # expires after 365. Re-enroll at least every 90 days.

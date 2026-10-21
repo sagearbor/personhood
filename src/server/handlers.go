@@ -16,6 +16,7 @@ import (
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
 	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
+	ipasnmethod "github.com/sagearbor/personhood/src/methods/ip-asn-reputation"
 )
 
 // startEnrollmentRequest is the JSON body of POST /enrollment/start.
@@ -291,6 +292,17 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 		MethodID:  methodID,
 		IssuerDID: s.issuerDID,
 		StartedAt: sess.CreatedAt,
+	}
+
+	// ip-asn-reputation judges the caller's own address, so the server fills
+	// it in; a client-supplied "ip" would let anyone pick a clean one.
+	if methodID == ipasnmethod.MethodID {
+		payload := map[string]any{}
+		for k, v := range req.Response.Payload {
+			payload[k] = v
+		}
+		payload["ip"] = clientIP(r, s.cfg.RateLimit.TrustedProxyHops)
+		req.Response.Payload = payload
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
