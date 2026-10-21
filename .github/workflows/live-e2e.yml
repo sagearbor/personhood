@@ -63,12 +63,15 @@ jobs:
       - name: OpenLine handshake (no ledger writes)
         if: steps.gate.outputs.run == 'true'
         run: bash scripts/e2e-openline.sh
+      - name: Install axe-core (pinned) for the accessibility scan
+        if: steps.gate.outputs.run == 'true'
+        run: npm i --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/axe" axe-core@4.14.0
       - name: Phone-viewport browser run
         if: steps.gate.outputs.run == 'true'
         env:
           CHROME: /usr/bin/google-chrome
           OUT: phone-check
-        run: node scripts/phone-check.mjs "$WEB_URL"
+        run: AXE="$RUNNER_TEMP/axe/node_modules/axe-core/axe.min.js" node scripts/phone-check.mjs "$WEB_URL"
       - uses: actions/upload-artifact@v4
         if: always() && steps.gate.outputs.run == 'true'
         with:
