@@ -6,12 +6,19 @@
 
 ---
 
-## Round-8 session summary (2026-10-20, launch hardening — in progress)
+## Round-8 session summary (2026-10-20, launch hardening)
 
 Launch-blocker pass, walking the path a phone user takes (enroll → verify →
 credential → use it at OpenLine). The invite gate and test mode stay ON until
 the owner picks launch day. The hub-facing readiness list lives in
-`tmp/launch/readiness.yaml` (gitignored).
+`tmp/launch/readiness.yaml` (gitignored); launch-day steps are in
+`docs/LAUNCH-RUNBOOK.md`. Live issuer revision after this round:
+`personhood-issuer-00005-8n4`.
+
+**Waiting on the owner** (not done; each needs a yes): turning off test mode
+and the invite gate (runbook §2); Firestore TTL deletion of expired records
+(§5); a billing budget alert on `arborfam-hub`; raising `--max-instances`;
+the privacy-notice wording (draft handed over, not committed).
 
 | Change | Path | What works |
 |---|---|---|
@@ -23,6 +30,7 @@ the owner picks launch day. The hub-facing readiness list lives in
 | **`sms_delivery` on `/v1/config`** | `src/server/handlers.go`, `server.go` | `"log"` when no Twilio sender is wired (the live deployment), so the web app can hide an SMS step whose code would never arrive. CORS now exposes `Retry-After` so the web app can read 429 waits. |
 | **Web app: phone-user launch UX** | `app/web` (PR #47) | The SMS step is hidden when `sms_delivery` is `log`. A config or start failure shows plain-language error + Retry instead of developer instructions or a stuck spinner, with a "waking up the issuer" notice after 3s and a 20s request timeout. Friendly copy for `rate_limited` (uses `Retry-After`), expired sessions (Start over), network errors, and 5xx. The credential can be saved as a `.json` file or shared via the share sheet. Accessibility: real `<label for>`, aria-live status, focus moves to each step heading, 44px tap targets, reduced motion honoured, and `--ink-faint` raised to pass WCAG AA. |
 | **Live e2e, every 6 hours** | `.github/workflows/live-e2e.yml`, `scripts/e2e-openline.sh`, `scripts/phone-check.mjs` | Runs against the deployed services. `e2e-remote.sh` does API enrollment and the policy check; its session assertion was a no-op and now checks that `email` is in `verified_methods`. `e2e-openline.sh` checks the Personhood → OpenLine handshake: the pinned issuer key equals the live key, OpenLine trusts the issuer DID, and a tampered credential is refused (403). It does not write to OpenLine's ledger unless `OPENLINE_E2E_CLAIM=1`. `phone-check.mjs` drives the real web app through a full enrollment in headless Chrome at 390x844 over the DevTools protocol (no npm deps), asserting no horizontal scroll or page errors, and saves screenshots. A failed scheduled run emails the repo owner, which is the issuer's alerting for now. Needs the `PERSONHOOD_INVITE_CODE` repo secret (set) while the gate is on. |
+| **Launch runbook, privacy inventory, load test** | `docs/LAUNCH-RUNBOOK.md`, `docs/privacy-data-inventory.md` | Launch-day order of switches (real SMTP → drop invite gate → privacy notice), verify-after-deploy, rollback by traffic split, retention TTL commands, and what to watch. Load test on one instance: 185 req/s, p95 216 ms, 0 failures. The limiter is verified live and can't be bypassed with a forged `X-Forwarded-For`. Worst-case cost under a month-long flood is about $250/mo, bounded by `max-instances 1`; normal use is $0. The privacy inventory lists every piece of personal data, where it lives and how long it stays, including the open gaps: no Firestore TTL policy yet, and full URLs in the Cloud Run platform log. |
 
 ## Round-7 session summary (2026-09-15, overnight)
 

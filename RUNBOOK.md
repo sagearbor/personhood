@@ -1,5 +1,7 @@
 # RUNBOOK — clean machine to verified on your phone
 
+> **Launching publicly?** Use [`docs/LAUNCH-RUNBOOK.md`](docs/LAUNCH-RUNBOOK.md), which covers switches, verification, rollback and the cost ceiling. Personal data handling is in [`docs/privacy-data-inventory.md`](docs/privacy-data-inventory.md).
+
 This is the only document you need to take Personhood from a fresh `git
 clone` to opening a URL on your Android phone, installing it as a PWA,
 and completing a real W3C credential enrollment.
