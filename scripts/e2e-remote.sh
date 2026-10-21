@@ -119,7 +119,9 @@ echo "landing page: Email verified"
 
 echo "== GET /v1/sessions/{id} =="
 curl -sf "$BASE/v1/sessions/$SESSION" >"$WORK/sess.json" || die "GET session failed"
-echo "session after click: $(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print({k:v for k,v in d.items() if k in ("status","completed_methods","methods")})' "$WORK/sess.json")"
+VERIFIED=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(m["method_id"] for m in d.get("verified_methods") or []))' "$WORK/sess.json")
+echo "session after click: verified_methods=[$VERIFIED]"
+[[ ",$VERIFIED," == *",email,"* ]] || die "session does not list email as verified after the click"
 
 echo "== POST /v1/credentials/issue =="
 curl -sf -X POST "$BASE/v1/credentials/issue" -H 'Content-Type: application/json' \

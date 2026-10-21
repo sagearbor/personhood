@@ -44,3 +44,6 @@ coverage/
 tmp/
 .archon/
 .claude/
+
+# firebase CLI deploy cache
+.firebase/
