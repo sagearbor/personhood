@@ -11,7 +11,8 @@
 # Required (env, or positional $1/$2 -- prefer env so secrets never land in
 # shell history or `ps`):
 #   PROJECT       GCP project id
-#   WEB_ORIGIN    origin allowed by CORS, e.g. https://personhood-web.web.app
+#   WEB_ORIGIN    origin(s) allowed by CORS, comma-separated, e.g.
+#                 https://personhood-web.web.app,https://openline-wallet.web.app
 #
 # Optional (env only):
 #   REGION                          default: us-central1
@@ -59,7 +60,8 @@ Usage: PROJECT=<gcp-project> WEB_ORIGIN=<https://your-web-origin> bash scripts/d
 
 Required env (or positional args -- env preferred so secrets never hit shell history):
   PROJECT            GCP project id
-  WEB_ORIGIN         Origin allowed by CORS, e.g. https://personhood-web.web.app
+  WEB_ORIGIN         Origin(s) allowed by CORS, comma-separated, e.g.
+                     https://personhood-web.web.app,https://openline-wallet.web.app
 
 Optional env:
   REGION                          default: us-central1
@@ -144,17 +146,21 @@ fi
 
 # TRUSTED_PROXY_HOPS=1: Cloud Run's frontend appends the real client IP to
 # X-Forwarded-For, so the issuer's rate limiter keys on the rightmost entry.
-ENV_VARS="SERVER_PUBLIC_URL=${SERVER_PUBLIC_URL},CORS_ALLOWED_ORIGINS=${WEB_ORIGIN},TRUSTED_PROXY_HOPS=1"
+#
+# Entries are joined with "@" and passed with gcloud's "^@^" delimiter prefix,
+# because CORS_ALLOWED_ORIGINS is itself a comma-separated list (WEB_ORIGIN
+# may name several origins, e.g. the web app and the OpenLine wallet).
+ENV_VARS="SERVER_PUBLIC_URL=${SERVER_PUBLIC_URL}@CORS_ALLOWED_ORIGINS=${WEB_ORIGIN}@TRUSTED_PROXY_HOPS=1"
 if [[ -n "$DEV_EXPOSE_CHALLENGE_SECRETS" && "$DEV_EXPOSE_CHALLENGE_SECRETS" != "0" ]]; then
-  ENV_VARS="${ENV_VARS},DEV_EXPOSE_CHALLENGE_SECRETS=${DEV_EXPOSE_CHALLENGE_SECRETS}"
+  ENV_VARS="${ENV_VARS}@DEV_EXPOSE_CHALLENGE_SECRETS=${DEV_EXPOSE_CHALLENGE_SECRETS}"
 fi
 if [[ -n "${INVITE_CODE:-}" ]]; then
-  ENV_VARS="${ENV_VARS},ENROLLMENT_INVITE_CODE=${INVITE_CODE}"
+  ENV_VARS="${ENV_VARS}@ENROLLMENT_INVITE_CODE=${INVITE_CODE}"
 fi
 if [[ -n "${SMTP_HOST:-}" && -n "${SMTP_FROM:-}" ]]; then
-  ENV_VARS="${ENV_VARS},SMTP_HOST=${SMTP_HOST},SMTP_FROM=${SMTP_FROM}"
-  [[ -n "${SMTP_PORT:-}" ]] && ENV_VARS="${ENV_VARS},SMTP_PORT=${SMTP_PORT}"
-  [[ -n "${SMTP_USER:-}" ]] && ENV_VARS="${ENV_VARS},SMTP_USER=${SMTP_USER}"
+  ENV_VARS="${ENV_VARS}@SMTP_HOST=${SMTP_HOST}@SMTP_FROM=${SMTP_FROM}"
+  [[ -n "${SMTP_PORT:-}" ]] && ENV_VARS="${ENV_VARS}@SMTP_PORT=${SMTP_PORT}"
+  [[ -n "${SMTP_USER:-}" ]] && ENV_VARS="${ENV_VARS}@SMTP_USER=${SMTP_USER}"
   if [[ -n "${SMTP_PASS:-}" ]]; then
     echo "warn: SMTP_PASS is set but this script does not forward it as a plain env var." >&2
     echo "      store it in Secret Manager and attach it with --set-secrets by hand; see" >&2
@@ -162,7 +168,34 @@ if [[ -n "${SMTP_HOST:-}" && -n "${SMTP_FROM:-}" ]]; then
   fi
 fi
 if [[ -n "${FIRESTORE_PROJECT_ID:-}" ]]; then
-  ENV_VARS="${ENV_VARS},FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT_ID}"
+  ENV_VARS="${ENV_VARS}@FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT_ID}"
+fi
+
+
+# --set-env-vars REPLACES the service's whole env. Refuse a deploy that would
+# silently drop a variable or a CORS origin the live service has today (a
+# forgotten INVITE_CODE turns the invite gate off; a single WEB_ORIGIN drops
+# every other allowed origin). Names only are compared/printed, never values.
+# ALLOW_ENV_DROP=1 overrides when the drop is intended.
+LIVE_ENV_JSON=$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format=json 2>/dev/null || true)
+if [[ -n "$LIVE_ENV_JSON" ]]; then
+  DROPS=$(NEW_ENV="$ENV_VARS" python3 -c '
+import json, os, sys
+live = json.load(sys.stdin)["spec"]["template"]["spec"]["containers"][0].get("env", [])
+new = dict(kv.split("=", 1) for kv in os.environ["NEW_ENV"].split("@"))
+drops = [e["name"] for e in live if "value" in e and e["name"] not in new]
+for e in live:
+    if e["name"] == "CORS_ALLOWED_ORIGINS" and "value" in e:
+        keep = {o.strip() for o in new.get("CORS_ALLOWED_ORIGINS", "").split(",")}
+        drops += ["CORS origin " + o.strip() for o in e["value"].split(",") if o.strip() and o.strip() not in keep]
+print("\n".join(drops))
+' <<<"$LIVE_ENV_JSON")
+  if [[ -n "$DROPS" && "${ALLOW_ENV_DROP:-}" != "1" ]]; then
+    echo "error: this deploy would remove settings the live $SERVICE has:" >&2
+    sed 's/^/  - /' <<<"$DROPS" >&2
+    echo "pass them again (WEB_ORIGIN takes a comma-separated list), or set ALLOW_ENV_DROP=1 if intended." >&2
+    exit 1
+  fi
 fi
 
 echo "==> deploying $SERVICE to $REGION (source build)"
@@ -174,7 +207,7 @@ gcloud run deploy "$SERVICE" \
   --memory 256Mi \
   --max-instances 1 \
   --set-secrets "ISSUER_ED25519_SK_B64=${SECRET_NAME}:latest" \
-  --set-env-vars "$ENV_VARS"
+  --set-env-vars "^@^${ENV_VARS}"
 
 echo "==> smoke-testing $SERVER_PUBLIC_URL"
 if curl -sf "${SERVER_PUBLIC_URL}/health" | grep -q '"ok"'; then
