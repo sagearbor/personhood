@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '../Button';
 import { Card } from '../Card';
 import type { Status } from '../StatusPill';
+import { friendlyError, isSessionExpired } from '@/lib/errors';
 import { beginMethod, completeMethod, type StartEnrollmentResponse } from '@/lib/api';
 import {
   captureFrameFromVideo,
@@ -30,6 +31,7 @@ type Phase =
 
 export function SelfieStep({
   session,
+  onSessionExpired,
   available,
   done,
   onVerified,
@@ -37,6 +39,8 @@ export function SelfieStep({
   onContinue,
 }: {
   session: StartEnrollmentResponse;
+  /** Called when the server reports the session is gone (expired) — the page shows a Start over banner. */
+  onSessionExpired?: () => void;
   available: boolean;
   done: boolean;
   onVerified: () => void;
@@ -48,6 +52,12 @@ export function SelfieStep({
     done ? 'verified' : available ? 'awaiting capture' : 'method not registered',
   );
   const [err, setErr] = useState<string | null>(null);
+  // Friendly copy for the user (lib/errors.ts); an expired session also
+  // raises the page-level "Start over" banner.
+  function reportError(e: unknown) {
+    setErr(friendlyError(e));
+    if (isSessionExpired(e)) onSessionExpired?.();
+  }
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -82,7 +92,7 @@ export function SelfieStep({
     } catch (e) {
       setPhase('error');
       setStatusText('camera unavailable');
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 
@@ -105,7 +115,7 @@ export function SelfieStep({
     } catch (e) {
       setPhase('error');
       setStatusText('capture failed');
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 
@@ -154,7 +164,7 @@ export function SelfieStep({
     } catch (e) {
       setPhase('error');
       setStatusText('request failed');
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 
@@ -235,6 +245,7 @@ export function SelfieStep({
         type="file"
         accept="image/*"
         data-testid="selfie-upload-input"
+        aria-label="Upload a selfie photo"
         style={{ display: 'none' }}
         onChange={onFileSelected}
       />

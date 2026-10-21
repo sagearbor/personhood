@@ -6,17 +6,19 @@ export type StepId = 'email' | 'sms' | 'id' | 'selfie' | 'credential';
 
 const DEFAULT_ORDER: StepId[] = ['email', 'sms', 'id', 'credential'];
 
-const LABELS: Record<StepId, { label: string; short: string }> = {
-  email: { label: 'Email', short: '01' },
-  sms: { label: 'SMS', short: '02' },
-  id: { label: 'ID + Selfie', short: '03' },
+// Pill numbers are derived from position (01, 02, …) so they stay
+// sequential when optional steps (SMS, selfie) are left out.
+const LABELS: Record<StepId, { label: string }> = {
+  email: { label: 'Email' },
+  sms: { label: 'SMS' },
+  id: { label: 'ID + Selfie' },
   // "selfie" (fuzzy-extractor-selfie) is only inserted into the order when
   // the issuer advertises the method (see app/page.tsx) — round-1
   // deployments without FUZZY_EXTRACTOR_ENABLED never render this pill, so
   // their 4-step layout is byte-for-byte unchanged from before this step
   // existed.
-  selfie: { label: 'Selfie anchor', short: '04' },
-  credential: { label: 'Credential', short: '05' },
+  selfie: { label: 'Selfie anchor' },
+  credential: { label: 'Credential' },
 };
 
 /**
@@ -51,10 +53,18 @@ export function Progress({
           ]
             .filter(Boolean)
             .join(' ');
+          const state = isSkipped ? 'skipped' : isDone ? 'completed' : isCurrent ? 'current step' : 'not started';
           return (
-            <li key={id} className={cls}>
-              <span className="pill__num">{LABELS[id].short}</span>
-              <span className="pill__label">{LABELS[id].label}</span>
+            <li key={id} className={cls} aria-current={isCurrent ? 'step' : undefined}>
+              <span className="pill__num" aria-hidden>
+                {String(idx + 1).padStart(2, '0')}
+              </span>
+              <span className="pill__label" aria-hidden>
+                {LABELS[id].label}
+              </span>
+              <span className="sr-only">
+                Step {idx + 1} of {order.length}: {LABELS[id].label}, {state}
+              </span>
               {idx < order.length - 1 && <span className="pill__tick" aria-hidden />}
             </li>
           );

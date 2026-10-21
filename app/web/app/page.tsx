@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Button } from '@/components/Button';
 import { Brand } from '@/components/Brand';
 import { Progress, type StepId } from '@/components/Progress';
 import { InviteGate } from '@/components/InviteGate';
@@ -13,18 +14,28 @@ import {
   startEnrollment,
   getConfig,
   ApiError,
+  DEFAULT_CONFIG,
   type StartEnrollmentResponse,
   type ConfigResponse,
   type Credential,
   SERVER_URL,
+  SERVER_IS_LOCAL,
+  smsUsable,
 } from '@/lib/api';
+import { friendlyError, MSG_SESSION_EXPIRED } from '@/lib/errors';
 import { selectEmailMethod, selectSmsMethod } from '@/lib/tiering';
 import { getOrCreateHolderKeyPair } from '@/lib/holderkey';
 import { readSavedInviteCode, saveInviteCode, inviteErrorMessage } from '@/lib/inviteCode';
 
 export default function Page() {
   const [session, setSession] = useState<StartEnrollmentResponse | null>(null);
-  const [startError, setStartError] = useState<string | null>(null);
+  // Boot / session-start failure: `friendly` is shown to everyone; `raw` is
+  // the underlying error text, shown only against a local dev server.
+  const [startError, setStartError] = useState<{ friendly: string; raw: string } | null>(null);
+  const [slowBoot, setSlowBoot] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const firstStepRender = useRef(true);
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [inviteCode, setInviteCode] = useState('');
   const [inviteError, setInviteError] = useState<string | null>(null);
@@ -58,8 +69,12 @@ export default function Page() {
     } catch (e) {
       if (e instanceof ApiError && (e.code === 'invite_code_required' || e.code === 'invite_code_invalid')) {
         setInviteError(inviteErrorMessage(e.code) ?? e.message);
+        // If config didn't say "invite required" (e.g. an older server, or
+        // the gate was switched on after boot) show the gate anyway rather
+        // than leaving the visitor on the boot spinner.
+        setConfig((c) => ({ ...(c ?? DEFAULT_CONFIG), invite_code_required: true }));
       } else {
-        setStartError(e instanceof Error ? e.message : String(e));
+        setStartError({ friendly: friendlyError(e), raw: e instanceof Error ? e.message : String(e) });
       }
     } finally {
       setStarting(false);
@@ -70,23 +85,69 @@ export default function Page() {
   // whether it's a test/dev deployment that exposes magic links on screen —
   // threaded down to EmailStep) before deciding whether to start a session
   // automatically or wait for the visitor to submit a code.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
+  //
+  // getConfig() throws on network failure / timeout / 5xx (a 404 from an
+  // older server resolves to defaults), so a cold or unreachable issuer
+  // lands on the friendly error + Retry screen instead of hanging.
+  const alive = useRef(true);
+  async function boot() {
+    setStartError(null);
+    setStarting(true);
+    try {
       const cfg = await getConfig();
-      if (!alive) return;
+      if (!alive.current) return;
       setConfig(cfg);
       if (cfg.invite_code_required) {
         setInviteCode(readSavedInviteCode());
+        setStarting(false);
       } else {
-        void beginSession();
+        await beginSession();
       }
-    })();
+    } catch (e) {
+      if (!alive.current) return;
+      setStartError({ friendly: friendlyError(e), raw: e instanceof Error ? e.message : String(e) });
+      setStarting(false);
+    }
+  }
+
+  useEffect(() => {
+    alive.current = true;
+    void boot();
     return () => {
-      alive = false;
+      alive.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // "Waking up the issuer" notice: Cloud Run scales to zero, so the first
+  // request after a quiet spell can take several seconds.
+  const booting = !session && !startError && !(config?.invite_code_required);
+  useEffect(() => {
+    if (!booting) {
+      setSlowBoot(false);
+      return;
+    }
+    const t = window.setTimeout(() => setSlowBoot(true), 3000);
+    return () => window.clearTimeout(t);
+  }, [booting]);
+
+  function retryBoot() {
+    if (config) void beginSession();
+    else void boot();
+  }
+
+  // Move focus to the new step's heading on step change, so screen-reader
+  // and keyboard users land at the top of the new card. Skipped on the very
+  // first render (don't steal focus on page load).
+  useEffect(() => {
+    if (!session) return;
+    if (firstStepRender.current) {
+      firstStepRender.current = false;
+      return;
+    }
+    const h = stageRef.current?.querySelector<HTMLElement>('h2');
+    h?.focus();
+  }, [step, session]);
 
   const idAvailable = !!session?.available_methods.some((m) => m.id === 'government-id-liveness');
   // fuzzy-extractor-selfie only appears in available_methods when the
@@ -104,15 +165,22 @@ export default function Page() {
   // from STATUS.md checklist #8: the UI no longer assumes a fixed method id.
   const emailMethod = session ? selectEmailMethod(session.available_methods) : null;
   const smsMethod = session ? selectSmsMethod(session.available_methods) : null;
-  const smsAvailable = !!smsMethod;
+  // A log-only SMS sender on a real deployment can't text anyone — treat
+  // that exactly like "no SMS method advertised" (see smsUsable()).
+  const smsAvailable = !!smsMethod && smsUsable(config);
   // "Test mode": no mail credential is configured, so the server either
   // exposes challenge secrets outright (DEV_EXPOSE_CHALLENGE_SECRETS=1) or
   // is only logging mail instead of sending it. Either way, EmailStep shows
   // the on-screen magic link when the begin response actually includes one.
   const emailDevMode = !!config && (config.challenge_secrets_exposed || config.email_delivery === 'log');
-  const stepOrder: StepId[] = selfieAvailable
-    ? ['email', 'sms', 'id', 'selfie', 'credential']
-    : ['email', 'sms', 'id', 'credential'];
+  const stepOrder: StepId[] = [
+    'email',
+    ...(smsAvailable ? (['sms'] as StepId[]) : []),
+    'id',
+    ...(selfieAvailable ? (['selfie'] as StepId[]) : []),
+    'credential',
+  ];
+  const onSessionExpired = () => setSessionExpired(true);
 
   function markCompleted(id: StepId) {
     setCompleted((s) => new Set(s).add(id));
@@ -125,6 +193,7 @@ export default function Page() {
     setSession(null);
     setStartError(null);
     setInviteError(null);
+    setSessionExpired(false);
     setStep('email');
     setCompleted(new Set());
     setSkipped(new Set());
@@ -146,10 +215,17 @@ export default function Page() {
       {session ? (
         <>
           <Progress current={step} completed={completed} skip={skipped} steps={stepOrder} />
-          <div className="stage">
+          {sessionExpired && (
+            <div className="expired" role="alert">
+              <p>{MSG_SESSION_EXPIRED}</p>
+              <Button onClick={restart}>Start over</Button>
+            </div>
+          )}
+          <div className="stage" ref={stageRef}>
             {step === 'email' && emailMethod && (
               <EmailStep
                 session={session}
+                onSessionExpired={onSessionExpired}
                 method={emailMethod}
                 done={completed.has('email')}
                 devMode={emailDevMode}
@@ -162,9 +238,10 @@ export default function Page() {
                 }}
               />
             )}
-            {step === 'sms' && smsMethod && (
+            {step === 'sms' && smsAvailable && smsMethod && (
               <SmsStep
                 session={session}
+                onSessionExpired={onSessionExpired}
                 method={smsMethod}
                 done={completed.has('sms')}
                 onVerified={() => markCompleted('sms')}
@@ -181,6 +258,7 @@ export default function Page() {
             {step === 'id' && (
               <IdStep
                 session={session}
+                onSessionExpired={onSessionExpired}
                 available={idAvailable}
                 done={completed.has('id')}
                 onVerified={() => markCompleted('id')}
@@ -197,6 +275,7 @@ export default function Page() {
             {step === 'selfie' && selfieAvailable && (
               <SelfieStep
                 session={session}
+                onSessionExpired={onSessionExpired}
                 available={selfieAvailable}
                 done={completed.has('selfie')}
                 onVerified={() => markCompleted('selfie')}
@@ -213,6 +292,7 @@ export default function Page() {
             {step === 'credential' && (
               <CredentialStep
                 session={session}
+                onSessionExpired={onSessionExpired}
                 credential={credential}
                 hasAnchor={
                   (completed.has('id') && !skipped.has('id')) ||
@@ -244,21 +324,34 @@ export default function Page() {
           onSubmit={() => beginSession(inviteCode.trim())}
         />
       ) : startError ? (
-        <div className="boot boot--err">
-          <h2>Cannot reach the issuer</h2>
-          <p className="err">{startError}</p>
-          <p className="muted">
-            Expected the server at <code>{SERVER_URL}</code>. Start it with{' '}
-            <code>go run ./src/server/cmd/server</code> and set
-            <code> NEXT_PUBLIC_PERSONHOOD_SERVER_URL</code> if it is hosted elsewhere.
-          </p>
+        <div className="boot boot--err" role="alert">
+          <h2>Can&rsquo;t start enrollment</h2>
+          <p className="msg">{startError.friendly}</p>
+          <div>
+            <Button onClick={retryBoot} loading={starting}>
+              Retry
+            </Button>
+          </div>
+          {SERVER_IS_LOCAL && (
+            <>
+              <p className="err">{startError.raw}</p>
+              <p className="muted">
+                Expected the server at <code>{SERVER_URL}</code>. Start it with{' '}
+                <code>go run ./src/server/cmd/server</code> and set
+                <code> NEXT_PUBLIC_PERSONHOOD_SERVER_URL</code> if it is hosted elsewhere.
+              </p>
+            </>
+          )}
         </div>
       ) : (
-        <div className="boot">
+        <div className="boot" role="status" aria-live="polite">
           <span className="cursor mono" aria-hidden>
             _
           </span>
           <p className="muted">Reaching the issuer…</p>
+          {slowBoot && (
+            <p className="muted">Waking up the issuer &mdash; this can take a few seconds.</p>
+          )}
         </div>
       )}
 
@@ -289,9 +382,28 @@ export default function Page() {
           justify-content: center;
         }
         .boot--err {
-          color: var(--danger);
+          color: var(--ink);
           text-align: left;
           align-items: stretch;
+        }
+        .msg {
+          font-size: 15px;
+          color: var(--ink);
+        }
+        .expired {
+          margin: var(--s-5) var(--s-5) 0;
+          padding: var(--s-4);
+          border: 1px solid rgba(255, 93, 93, 0.4);
+          background: var(--danger-dim);
+          border-radius: var(--r-2);
+          display: flex;
+          flex-direction: column;
+          gap: var(--s-3);
+          align-items: flex-start;
+        }
+        .expired p {
+          margin: 0;
+          color: var(--ink);
         }
         .boot h2 {
           margin: 0;

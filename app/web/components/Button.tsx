@@ -35,6 +35,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
           text-transform: uppercase;
           font-weight: 600;
           border-radius: var(--r-2);
+          /* WCAG 2.5.5 / Apple HIG: tap targets at least 44px tall */
+          min-height: 44px;
           transition: transform var(--t-fast) var(--ease-out), background var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out), opacity var(--t-fast) var(--ease-out);
         }
         .btn:active:not(:disabled) {
