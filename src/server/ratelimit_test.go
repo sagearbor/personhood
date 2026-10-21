@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -117,5 +118,30 @@ func TestRouter_RejectsOversizedBody(t *testing.T) {
 	status, _ := postRaw(t, base+"/enrollment/start", []byte(body))
 	if status != http.StatusBadRequest {
 		t.Fatalf("oversized body: status %d, want 400", status)
+	}
+}
+
+func TestLimiterKey_GroupsIPv6By64(t *testing.T) {
+	a := limiterKey("2001:db8:1:2:aaaa::1")
+	b := limiterKey("2001:db8:1:2:ffff:ffff:ffff:ffff")
+	c := limiterKey("2001:db8:1:3::1")
+	if a != b || a == c {
+		t.Errorf("keys: %q %q %q; want the first two equal and the third different", a, b, c)
+	}
+	if got := limiterKey("203.0.113.7"); got != "203.0.113.7" {
+		t.Errorf("IPv4 key = %q", got)
+	}
+	if got := limiterKey("::ffff:203.0.113.7"); got != "::ffff:203.0.113.7" {
+		t.Errorf("IPv4-mapped key = %q, want it untouched", got)
+	}
+}
+
+func TestRateLimiter_CapsBucketCount(t *testing.T) {
+	l := newRateLimiter(DefaultRateLimitConfig(), time.Now)
+	for i := 0; i < maxBuckets; i++ {
+		l.buckets[strconv.Itoa(i)] = &bucket{tokens: 1, last: time.Now()}
+	}
+	if ok, _ := l.allow("198.51.100.1", classDefault); ok {
+		t.Error("a new client was admitted with the bucket map full")
 	}
 }

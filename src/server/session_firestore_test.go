@@ -178,3 +178,18 @@ func TestNewSessionStoreFromEnv_Firestore(t *testing.T) {
 		}
 	})
 }
+
+func TestValidSessionID(t *testing.T) {
+	id, err := randomSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validSessionID(id) {
+		t.Fatalf("randomSessionID produced %q, which validSessionID rejects", id)
+	}
+	for _, bad := range []string{"", "x", id[:42], id + "A", id[:42] + "/", id[:42] + "%"} {
+		if validSessionID(bad) {
+			t.Errorf("validSessionID(%q) = true", bad)
+		}
+	}
+}
