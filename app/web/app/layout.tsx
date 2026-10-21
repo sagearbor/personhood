@@ -39,7 +39,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
+  // No maximumScale: pinch-zoom must stay available (WCAG 1.4.4). Inputs are
+  // 16px (components/Field.tsx), so iOS doesn't zoom on focus anyway.
   themeColor: '#08090c',
   viewportFit: 'cover',
 };

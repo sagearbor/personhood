@@ -15,19 +15,25 @@
 //                           from env so it never appears in argv)
 //   CHROME                  Chrome binary; default: the macOS app path
 //   OUT                     screenshot dir; default ./tmp/phone-check
+//   AXE                     optional path to axe-core's axe.min.js. When set,
+//                           every step is also scanned for WCAG 2.x A/AA
+//                           problems and any serious or critical one fails
+//                           the run. Install a pinned copy with
+//                           `npm i --no-save --prefix <dir> axe-core@4.14.0`.
 //
 // Requires a deployment in test mode (DEV_EXPOSE_CHALLENGE_SECRETS=1): the
 // magic link must be on screen, since there is no inbox to read. No npm
 // dependencies — Chrome DevTools Protocol over Node's built-in WebSocket.
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, writeFileSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const WEB_URL = process.argv[2] || 'https://personhood-web.web.app';
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const OUT = process.env.OUT || 'tmp/phone-check';
+const AXE_SRC = process.env.AXE ? readFileSync(process.env.AXE, 'utf8') : '';
 const INVITE = process.env.PERSONHOOD_INVITE_CODE || '';
 const W = 390;
 const H = 844;
@@ -120,7 +126,19 @@ async function checkpoint(name) {
   writeFileSync(file, Buffer.from(data, 'base64'));
   if (overflow > 0) throw new Error(`${name}: page is ${overflow}px wider than the ${W}px viewport`);
   if (pageErrors.length) throw new Error(`${name}: uncaught page error: ${pageErrors[0]}`);
+  if (AXE_SRC) await axeScan(name);
   console.log(`ok   ${name}  (${file})`);
+}
+
+// axeScan runs axe-core against the current DOM and fails on serious or
+// critical WCAG 2.x A/AA violations. Lesser ones are printed, not fatal.
+async function axeScan(name) {
+  if (!(await evaluate('typeof axe !== "undefined"'))) await evaluate(AXE_SRC + ';true');
+  const found = await evaluate(`axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] } })
+    .then(r => r.violations.map(v => ({ id: v.id, impact: v.impact, help: v.help, n: v.nodes.length, target: String(v.nodes[0]?.target ?? '') })))`);
+  const fatal = found.filter(v => v.impact === 'serious' || v.impact === 'critical');
+  for (const v of found) console.log(`     a11y ${v.impact}: ${v.id} (${v.n}x, e.g. ${v.target}) ${v.help}`);
+  if (fatal.length) throw new Error(`${name}: ${fatal.length} serious/critical accessibility violation(s): ${fatal.map(v => v.id).join(', ')}`);
 }
 
 async function waitFor(desc, expr, timeoutMs = 30000) {
