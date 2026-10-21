@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '../Button';
 import { Card } from '../Card';
 import type { Status } from '../StatusPill';
+import { friendlyError, isSessionExpired } from '@/lib/errors';
 import {
   beginMethod,
   completeMethod,
@@ -15,6 +16,7 @@ type Phase = 'idle' | 'opening' | 'in-persona' | 'polling' | 'done' | 'error' | 
 
 export function IdStep({
   session,
+  onSessionExpired,
   available,
   done,
   onVerified,
@@ -22,6 +24,8 @@ export function IdStep({
   onContinue,
 }: {
   session: StartEnrollmentResponse;
+  /** Called when the server reports the session is gone (expired) — the page shows a Start over banner. */
+  onSessionExpired?: () => void;
   available: boolean;
   done: boolean;
   onVerified: () => void;
@@ -33,6 +37,12 @@ export function IdStep({
     done ? 'verified' : available ? 'awaiting start' : 'method not registered',
   );
   const [err, setErr] = useState<string | null>(null);
+  // Friendly copy for the user (lib/errors.ts); an expired session also
+  // raises the page-level "Start over" banner.
+  function reportError(e: unknown) {
+    setErr(friendlyError(e));
+    if (isSessionExpired(e)) onSessionExpired?.();
+  }
   const [challenge, setChallenge] = useState<ChallengeData | null>(null);
   const pollTimer = useRef<number | null>(null);
 
@@ -64,7 +74,7 @@ export function IdStep({
     } catch (e) {
       setPhase('error');
       setStatusText('failed to start');
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 
@@ -104,7 +114,7 @@ export function IdStep({
       } catch (e) {
         setPhase('error');
         setStatusText('poll failed');
-        setErr(e instanceof Error ? e.message : String(e));
+        reportError(e);
         stopPolling();
       }
     };

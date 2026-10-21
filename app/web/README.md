@@ -114,6 +114,23 @@ into a W3C VC and returns the signed JSON. The viewer pretty-prints the VC,
 shows the issuer DID, the holder DID, the anchor (or warns if none), and
 offers a "save to this device" button that writes the credential to
 IndexedDB (optionally biometric-gating via WebAuthn).
+"Save credential" downloads `personhood-credential.json`, and "Share" (where
+`navigator.share` exists) hands it to the OS share sheet — as a file when
+`navigator.canShare({files})` allows, else as text. The issuer keeps only
+the credential ID on the (expiring) enrollment session, not the credential.
+
+### SMS on deployments without a real sender
+
+When GET `/v1/config` reports `sms_delivery: "log"` and the server URL is not
+localhost, the SMS step and its progress pill are hidden — a log-only sender
+can't text anyone. A missing `sms_delivery` keeps the old behaviour.
+
+### Errors
+
+`lib/errors.ts` maps ApiError codes to plain-language copy (rate limits with
+Retry-After, expired sessions → Start over, network/timeout, generic 5xx).
+Requests time out after 20s. Developer hints on the boot error screen only
+appear when the server URL is localhost.
 
 ## TypeScript checks
 

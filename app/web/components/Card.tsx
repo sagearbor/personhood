@@ -22,10 +22,19 @@ export function Card({
     <section className="card" aria-busy={status === 'pending'}>
       <div className="card__head">
         <div className="card__titles">
-          <h2 className="card__title">{title}</h2>
+          {/* tabIndex=-1: app/page.tsx moves focus here on step change. */}
+          <h2 className="card__title" tabIndex={-1}>
+            {title}
+          </h2>
           {subtitle ? <p className="card__sub">{subtitle}</p> : null}
         </div>
         <StatusPill status={status}>{statusLabel}</StatusPill>
+      </div>
+      {/* Polite announcement of non-error status changes (sent, verified…).
+          Errors are announced by StatusPill's role="alert", so they're
+          excluded here to avoid a double announcement. */}
+      <div className="sr-only" aria-live="polite" aria-atomic="true">
+        {status === 'error' ? '' : statusLabel}
       </div>
       <div className="card__body">{children}</div>
       {footer ? <div className="card__foot">{footer}</div> : null}
@@ -54,6 +63,10 @@ export function Card({
           line-height: 1.2;
           margin: 0 0 4px;
           letter-spacing: -0.01em;
+        }
+        .card__title:focus {
+          /* programmatic focus target only; not an interactive control */
+          outline: none;
         }
         .card__sub {
           margin: 0;

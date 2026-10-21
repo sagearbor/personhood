@@ -1,21 +1,33 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '../Button';
 import { Card } from '../Card';
 import type { Status } from '../StatusPill';
+import { friendlyError, isSessionExpired } from '@/lib/errors';
 import { issueCredential, type StartEnrollmentResponse, type Credential } from '@/lib/api';
 import { saveCredential, clearSession } from '@/lib/storage';
 import { registerDevicePasskey, isWebAuthnAvailable } from '@/lib/webauthn';
+import {
+  CREDENTIAL_FILENAME,
+  CREDENTIAL_MIME,
+  credentialJSON,
+  pickShareMode,
+  saveCredentialFile,
+  type ShareMode,
+} from '@/lib/credentialFile';
 
 export function CredentialStep({
   session,
+  onSessionExpired,
   credential,
   hasAnchor,
   onIssued,
   onRestart,
 }: {
   session: StartEnrollmentResponse;
+  /** Called when the server reports the session is gone (expired) — the page shows a Start over banner. */
+  onSessionExpired?: () => void;
   credential: Credential | null;
   hasAnchor: boolean;
   onIssued: (c: Credential) => void;
@@ -24,8 +36,58 @@ export function CredentialStep({
   const [status, setStatus] = useState<Status>(credential ? 'ok' : 'idle');
   const [statusText, setStatusText] = useState<string>(credential ? 'issued' : 'ready to issue');
   const [err, setErr] = useState<string | null>(null);
+  // Friendly copy for the user (lib/errors.ts); an expired session also
+  // raises the page-level "Start over" banner.
+  function reportError(e: unknown) {
+    setErr(friendlyError(e));
+    if (isSessionExpired(e)) onSessionExpired?.();
+  }
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [downloaded, setDownloaded] = useState(false);
+  const [shareMode, setShareMode] = useState<ShareMode>('none');
+
+  // Feature-detect sharing after mount (navigator isn't available during the
+  // static-export prerender).
+  useEffect(() => {
+    if (!credential || typeof navigator === 'undefined') return;
+    let file: File | null = null;
+    try {
+      file = new File([credentialJSON(credential)], CREDENTIAL_FILENAME, { type: CREDENTIAL_MIME });
+    } catch {
+      file = null;
+    }
+    setShareMode(pickShareMode(navigator, file));
+  }, [credential]);
+
+  function download() {
+    if (!credential) return;
+    setErr(null);
+    try {
+      saveCredentialFile(credential);
+      setDownloaded(true);
+    } catch (e) {
+      reportError(e);
+    }
+  }
+
+  async function share() {
+    if (!credential) return;
+    setErr(null);
+    const text = credentialJSON(credential);
+    try {
+      if (shareMode === 'files') {
+        const file = new File([text], CREDENTIAL_FILENAME, { type: CREDENTIAL_MIME });
+        await navigator.share({ files: [file], title: 'Personhood credential' });
+      } else {
+        await navigator.share({ title: 'Personhood credential', text });
+      }
+    } catch (e) {
+      // Dismissing the share sheet rejects with AbortError — not an error.
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      reportError(e);
+    }
+  }
 
   async function issue() {
     setErr(null);
@@ -39,7 +101,7 @@ export function CredentialStep({
     } catch (e) {
       setStatus('error');
       setStatusText('issue failed');
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 
@@ -56,14 +118,14 @@ export function CredentialStep({
       setSaved(true);
       await clearSession().catch(() => {});
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 
   async function copyJSON() {
     if (!credential) return;
     try {
-      await navigator.clipboard.writeText(JSON.stringify(credential, null, 2));
+      await navigator.clipboard.writeText(credentialJSON(credential));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch (e) {
@@ -136,6 +198,14 @@ export function CredentialStep({
             <Button onClick={save} disabled={saved}>
               {saved ? 'Saved to this device ✓' : 'Save to this device'}
             </Button>
+            <Button variant="ghost" onClick={download}>
+              {downloaded ? 'Saved file ✓' : 'Save credential'}
+            </Button>
+            {shareMode !== 'none' && (
+              <Button variant="ghost" onClick={share}>
+                Share
+              </Button>
+            )}
             <Button variant="ghost" onClick={copyJSON}>
               {copied ? 'Copied!' : 'Copy JSON'}
             </Button>
@@ -144,6 +214,10 @@ export function CredentialStep({
             </Button>
           </div>
 
+          <p className="keep">
+            The issuer does not keep a copy of this credential file; save it now.
+          </p>
+
           <details className="json">
             <summary>Show full credential JSON</summary>
             <pre>{JSON.stringify(credential, null, 2)}</pre>
@@ -151,7 +225,13 @@ export function CredentialStep({
         </>
       )}
 
-      {err && <p className="err">{err}</p>}
+      {err && (
+        // role=alert only when StatusPill isn't already alerting (avoid a
+        // double announcement for issue failures).
+        <p className="err" role={status === 'error' ? undefined : 'alert'}>
+          {err}
+        </p>
+      )}
 
       <style jsx>{`
         .row {
@@ -212,7 +292,9 @@ export function CredentialStep({
           overflow: hidden;
         }
         .json summary {
-          padding: 10px 14px;
+          /* 13 + 18 + 13 = 44px tap target; keeps the native disclosure marker */
+          padding: 13px 14px;
+          line-height: 18px;
           cursor: pointer;
           font-family: var(--f-mono);
           font-size: 12px;
@@ -230,6 +312,11 @@ export function CredentialStep({
           max-height: 60vh;
           overflow: auto;
           border-top: 1px solid var(--border);
+        }
+        .keep {
+          margin: 0;
+          font-size: 13px;
+          color: var(--ink-muted);
         }
         .err {
           margin: 0;

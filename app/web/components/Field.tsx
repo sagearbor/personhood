@@ -1,6 +1,6 @@
 'use client';
 
-import { type InputHTMLAttributes, forwardRef } from 'react';
+import { type InputHTMLAttributes, forwardRef, useId } from 'react';
 
 type FieldProps = InputHTMLAttributes<HTMLInputElement> & {
   label: string;
@@ -12,12 +12,29 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
   { label, hint, invalid, id, ...props },
   ref,
 ) {
-  const fieldId = id ?? props.name ?? Math.random().toString(36).slice(2);
+  // useId (not Math.random) so the id is stable across the static-export
+  // prerender and hydration — a mismatched id would break the label link.
+  const autoId = useId();
+  const fieldId = id ?? props.name ?? `field-${autoId}`;
+  const hintId = `${fieldId}-hint`;
   return (
-    <label className="field" htmlFor={fieldId} data-invalid={invalid || undefined}>
-      <span className="field__label">{label}</span>
-      <input ref={ref} id={fieldId} {...props} className="field__input" />
-      {hint ? <span className="field__hint">{hint}</span> : null}
+    <div className="field" data-invalid={invalid || undefined}>
+      <label className="field__label" htmlFor={fieldId}>
+        {label}
+      </label>
+      <input
+        ref={ref}
+        id={fieldId}
+        aria-invalid={invalid || undefined}
+        aria-describedby={hint ? hintId : undefined}
+        {...props}
+        className="field__input"
+      />
+      {hint ? (
+        <span className="field__hint" id={hintId}>
+          {hint}
+        </span>
+      ) : null}
       <style jsx>{`
         .field {
           display: flex;
@@ -60,6 +77,6 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
           color: var(--danger);
         }
       `}</style>
-    </label>
+    </div>
   );
 });

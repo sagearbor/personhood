@@ -5,10 +5,12 @@ import { Button } from '../Button';
 import { Card } from '../Card';
 import { Field } from '../Field';
 import type { Status } from '../StatusPill';
+import { friendlyError, isSessionExpired } from '@/lib/errors';
 import { beginMethod, completeMethod, type MethodSummary, type StartEnrollmentResponse } from '@/lib/api';
 
 export function SmsStep({
   session,
+  onSessionExpired,
   method,
   done,
   onVerified,
@@ -16,6 +18,8 @@ export function SmsStep({
   onSkip,
 }: {
   session: StartEnrollmentResponse;
+  /** Called when the server reports the session is gone (expired) — the page shows a Start over banner. */
+  onSessionExpired?: () => void;
   /** The method to drive — 'phone-carrier-tier' when the server advertises it, else plain 'sms'. See lib/tiering.ts. */
   method: MethodSummary;
   done: boolean;
@@ -31,6 +35,12 @@ export function SmsStep({
   const [statusText, setStatusText] = useState<string>(done ? 'verified' : 'awaiting input');
   const [stage, setStage] = useState<'enter-phone' | 'enter-code'>(done ? 'enter-code' : 'enter-phone');
   const [err, setErr] = useState<string | null>(null);
+  // Friendly copy for the user (lib/errors.ts); an expired session also
+  // raises the page-level "Start over" banner.
+  function reportError(e: unknown) {
+    setErr(friendlyError(e));
+    if (isSessionExpired(e)) onSessionExpired?.();
+  }
 
   async function sendCode() {
     setErr(null);
@@ -44,7 +54,7 @@ export function SmsStep({
     } catch (e) {
       setStatus('error');
       setStatusText('send failed');
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 
@@ -69,7 +79,7 @@ export function SmsStep({
     } catch (e) {
       setStatus('error');
       setStatusText('error');
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 

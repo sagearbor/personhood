@@ -5,6 +5,7 @@ import { Button } from '../Button';
 import { Card } from '../Card';
 import { Field } from '../Field';
 import type { Status } from '../StatusPill';
+import { friendlyError, isSessionExpired } from '@/lib/errors';
 import {
   beginMethod,
   extractMagicLinkUrl,
@@ -19,6 +20,7 @@ const POLL_MS = 2500;
 
 export function EmailStep({
   session,
+  onSessionExpired,
   method,
   done,
   devMode,
@@ -27,6 +29,8 @@ export function EmailStep({
   onContinue,
 }: {
   session: StartEnrollmentResponse;
+  /** Called when the server reports the session is gone (expired) — the page shows a Start over banner. */
+  onSessionExpired?: () => void;
   /** The method to drive — 'email-tier' when the server advertises it, else plain 'email'. See lib/tiering.ts. */
   method: MethodSummary;
   done: boolean;
@@ -51,6 +55,12 @@ export function EmailStep({
   const [status, setStatus] = useState<Status>(done ? 'ok' : 'idle');
   const [statusText, setStatusText] = useState<string>(done ? 'verified' : 'awaiting input');
   const [err, setErr] = useState<string | null>(null);
+  // Friendly copy for the user (lib/errors.ts); an expired session also
+  // raises the page-level "Start over" banner.
+  function reportError(e: unknown) {
+    setErr(friendlyError(e));
+    if (isSessionExpired(e)) onSessionExpired?.();
+  }
   const [magicLink, setMagicLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const pollTimer = useRef<number | null>(null);
@@ -73,8 +83,16 @@ export function EmailStep({
           return;
         }
       } catch (e) {
-        // A transient poll failure is not fatal; keep polling.
         if (cancelled) return;
+        // An expired session can never become verified — stop polling and
+        // offer Start over instead of retrying forever.
+        if (isSessionExpired(e)) {
+          setStatus('error');
+          setStatusText('session expired');
+          reportError(e);
+          return;
+        }
+        // Any other poll failure is transient; keep polling.
         setStatusText('waiting for click (retrying)');
       }
       pollTimer.current = window.setTimeout(tick, POLL_MS);
@@ -106,7 +124,7 @@ export function EmailStep({
     } catch (e) {
       setStatus('error');
       setStatusText('send failed');
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 
@@ -134,7 +152,7 @@ export function EmailStep({
         setStatusText('not clicked yet');
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      reportError(e);
     }
   }
 
@@ -266,6 +284,9 @@ export function EmailStep({
           word-break: break-all;
           text-decoration: underline;
           text-underline-offset: 2px;
+          display: inline-flex;
+          align-items: center;
+          min-height: 44px;
         }
       `}</style>
     </Card>
