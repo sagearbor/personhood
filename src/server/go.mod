@@ -3,7 +3,7 @@ module github.com/sagearbor/personhood/src/server
 go 1.22.0
 
 require (
-	github.com/go-chi/chi/v5 v5.1.0
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/sagearbor/personhood/pkg/firestoreclient v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/pkg/redisclient v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/pkg/types v0.0.0-00010101000000-000000000000
@@ -25,7 +25,7 @@ require (
 )
 
 require (
-	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
+	github.com/cyberphone/json-canonicalization v0.0.0-20261011152517-32a48195b9b2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
