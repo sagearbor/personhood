@@ -78,6 +78,9 @@ func TestE2E_AirdropTestAnchors(t *testing.T) {
 		"SOCIAL_VOUCHING_ENABLED=1",
 		"SOCIAL_VOUCHING_SECRET="+vouchSecret,
 		"SOCIAL_VOUCHING_SEED_IDS=seed-1,seed-2,seed-3",
+		// This test plays a whole vouching graph of people from one loopback
+		// address, which per-client rate limiting would rightly throttle.
+		"RATE_LIMIT=off",
 	)
 	cmd.Stdout = logBuf
 	cmd.Stderr = logBuf

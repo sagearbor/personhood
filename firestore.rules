@@ -1,21 +1,20 @@
-// firestore.rules — required by `firebase.json`'s "firestore" block so the
-// Firestore emulator (used by `firebase emulators:exec` in
-// pkg/firestoreclient's and the store packages' integration tests) has
-// rules to load.
+// firestore.rules — deny every client-SDK read and write.
 //
-// These rules are NEVER deployed to the real arborfam-hub project by any
-// script in this repo (no `firebase deploy --only firestore:rules` call
-// exists here) — the production issuer authenticates to Firestore as a
-// service account via an IAM-scoped OAuth2 access token (see
-// pkg/firestoreclient), which is Admin access and bypasses Security Rules
-// entirely, the same way the Firestore Admin SDK does. This file only
-// governs the local emulator used in tests, so "allow all" is intentional
-// and safe: there is nothing in it to leak.
+// The issuer is the only thing that touches its Firestore collections, and it
+// does so as a service account with an IAM-scoped OAuth2 token (see
+// pkg/firestoreclient), which bypasses Security Rules entirely, the same way
+// the Admin SDK does. In the emulator, pkg/firestoreclient authenticates as
+// "Bearer owner" — the emulator's admin credential — for the same reason.
+//
+// firebase.json points the shared production (default) database at this
+// file, so a bare `firebase deploy` from this repo publishes it. It must
+// therefore be safe to publish: these collections hold email addresses and
+// enrollment session state, and nothing outside the issuer should read them.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }
