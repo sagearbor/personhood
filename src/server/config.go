@@ -88,6 +88,14 @@ type Config struct {
 	// Env: ENROLLMENT_INVITE_CODE. Never logged; compared in constant time.
 	EnrollmentInviteCode string
 
+	// AdminToken, when non-empty, enables POST /v1/admin/revoke for callers
+	// that send it as "Authorization: Bearer <token>". Empty (the default)
+	// leaves the admin routes unmounted (404). Deployed from Secret Manager,
+	// never as a plain env value; never logged; compared in constant time.
+	//
+	// Env: ADMIN_TOKEN.
+	AdminToken string
+
 	// RateLimit bounds per-client request rates (see RateLimitConfig). The
 	// zero value disables it; LoadConfigFromEnv enables
 	// DefaultRateLimitConfig unless RATE_LIMIT=off.
@@ -113,6 +121,8 @@ type Config struct {
 //     body; GET /v1/config advertises that the gate is on (but never the
 //     code). Pair it with DEV_EXPOSE_CHALLENGE_SECRETS on any deployment
 //     that has a public URL but no mail credential yet.
+//   - ADMIN_TOKEN                  default empty (admin routes off). Bearer
+//     token for POST /v1/admin/revoke.
 //   - RATE_LIMIT                   default on (DefaultRateLimitConfig);
 //     "off" disables per-client rate limiting (load tests only).
 //   - TRUSTED_PROXY_HOPS           default 0. Set 1 behind Cloud Run so the
@@ -125,6 +135,7 @@ func LoadConfigFromEnv() (Config, error) {
 		SessionTTL:             60 * time.Minute,
 		ExposeChallengeSecrets: envBool(os.Getenv("DEV_EXPOSE_CHALLENGE_SECRETS")),
 		EnrollmentInviteCode:   strings.TrimSpace(os.Getenv("ENROLLMENT_INVITE_CODE")),
+		AdminToken:             strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
 	}
 
 	if m := os.Getenv("SESSION_TTL_MINUTES"); m != "" {

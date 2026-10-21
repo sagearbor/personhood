@@ -106,9 +106,12 @@ show the user what mode they are in.
   `CeremonyContext.UserID`. The server threads `user_input` from the request
   body straight into that field. A future revision will grow a dedicated
   `MethodInput` map.
-- **Status list is unsigned**: `/v1/status-list/{listId}` returns a placeholder
-  Status List 2021 credential with no revocations and no signature. v0.2 signs
-  it the same way credentials are signed.
+- **Status list is unsigned**: `/v1/status-list/default` serves a Status List
+  2021 credential with the real revoked bits (each issued credential owns a
+  random slot; `POST /v1/admin/revoke` with the `ADMIN_TOKEN` bearer sets
+  one), but the list itself carries no signature yet. v0.2 signs it the same
+  way credentials are signed. Revocations persist in Firestore when
+  `FIRESTORE_PROJECT_ID` is set; otherwise they live in memory.
 
 ## Tests
 

@@ -417,9 +417,21 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	if bio := biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.MethodID); bio != "" {
 		nullifierBinding = NullifierBindingForBiometricCommitment(bio)
 	}
-	cred, err := s.issuer.Issue(view.HolderDID, view.VerifiedMethods, view.AnchorMethodID, nullifierBinding, issuedAt, expiresAt, nil)
+	// Every credential gets a random slot in the status list so it can be
+	// revoked later (see RevocationStore). A slot claimed for a request
+	// that then fails stays unused, which is harmless.
+	statusIndex, err := s.revocations.Allocate(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "status_slot_failed", err.Error())
+		return
+	}
+	cred, err := s.issuer.Issue(view.HolderDID, view.VerifiedMethods, view.AnchorMethodID, nullifierBinding, issuedAt, expiresAt, &statusIndex)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue_failed", err.Error())
+		return
+	}
+	if err := s.revocations.Bind(r.Context(), statusIndex, cred.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "status_slot_failed", err.Error())
 		return
 	}
 	if err := s.sessions.MarkIssued(req.SessionID, cred.ID); err != nil {
@@ -435,13 +447,24 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatusList(w http.ResponseWriter, r *http.Request) {
-	// v0.1: the server publishes an empty (no revocations) Status List 2021
-	// credential. Revocation issuance is deferred to v0.2.
-	listID := chi.URLParam(r, "listId")
-	if listID == "" {
-		listID = "default"
+	// The issuer publishes one list, "default". Credentials reference it by
+	// absolute URL, so any other id is unknown.
+	if chi.URLParam(r, "listId") != "default" {
+		writeError(w, http.StatusNotFound, "status_list_not_found", "this issuer publishes only the \"default\" status list")
+		return
 	}
-	bits := credential.NewBitString(131_072) // W3C-recommended minimum size
+	revoked, err := s.revocations.Revoked(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "status_list_failed", err.Error())
+		return
+	}
+	bits := credential.NewBitString(statusListSize)
+	for _, idx := range revoked {
+		if err := bits.Set(idx); err != nil {
+			writeError(w, http.StatusInternalServerError, "status_list_failed", err.Error())
+			return
+		}
+	}
 	encoded, err := bits.Encode()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encode_failed", err.Error())
@@ -463,9 +486,53 @@ func (s *Server) handleStatusList(w http.ResponseWriter, r *http.Request) {
 			"statusPurpose": "revocation",
 			"encodedList":   encoded,
 		},
-		"_note": fmt.Sprintf("v0.1 placeholder list %q: no revocations issued. v0.2 will sign this credential.", listID),
+		"_note": "v0.1: this status list credential is not signed yet; fetch it over HTTPS from the issuer's own host.",
 	}
+	// Short cache: verifiers may reuse the list briefly, and a revocation
+	// shows up within a minute (the store itself caches for 30s).
+	w.Header().Set("Cache-Control", "public, max-age=30")
 	writeJSON(w, http.StatusOK, out)
+}
+
+type adminRevokeRequest struct {
+	CredentialID string `json:"credential_id"`
+}
+
+type adminRevokeResponse struct {
+	CredentialID    string `json:"credential_id"`
+	StatusListIndex int    `json:"status_list_index"`
+	AlreadyRevoked  bool   `json:"already_revoked"`
+}
+
+// handleAdminRevoke sets a credential's revocation bit. Mounted only when
+// Config.AdminToken is set; the caller must send it as a Bearer token.
+func (s *Server) handleAdminRevoke(w http.ResponseWriter, r *http.Request) {
+	const prefix = "Bearer "
+	got := r.Header.Get("Authorization")
+	if !strings.HasPrefix(got, prefix) ||
+		subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(got, prefix)), []byte(s.cfg.AdminToken)) != 1 {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "a valid admin bearer token is required")
+		return
+	}
+	var req adminRevokeRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(req.CredentialID) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "credential_id is required")
+		return
+	}
+	idx, already, err := s.revocations.Revoke(r.Context(), req.CredentialID)
+	if errors.Is(err, ErrCredentialNotFound) {
+		writeError(w, http.StatusNotFound, "credential_not_found", err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "revoke_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, adminRevokeResponse{CredentialID: req.CredentialID, StatusListIndex: idx, AlreadyRevoked: already})
 }
 
 func (s *Server) handleDIDDocument(w http.ResponseWriter, _ *http.Request) {

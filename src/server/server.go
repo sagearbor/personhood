@@ -46,9 +46,10 @@ type Server struct {
 	issuerPublicKey ed25519.PublicKey
 	statusListURL   string
 
-	registry *registry.Registry
-	issuer   *credential.Issuer
-	sessions SessionStore
+	registry    *registry.Registry
+	issuer      *credential.Issuer
+	sessions    SessionStore
+	revocations RevocationStore
 
 	// methodRoutes carries additional HTTP handlers a method plugin needs
 	// the server to host (e.g. third-party webhook receivers). Populated by
@@ -145,6 +146,11 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		return nil, fmt.Errorf("server: session store: %w", err)
 	}
 
+	revocations, err := NewRevocationStoreFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("server: revocation store: %w", err)
+	}
+
 	emailDelivery := deps.EmailSenderKind
 	if emailDelivery == "" {
 		emailDelivery = emailmethod.SenderKindUnknown
@@ -161,6 +167,7 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		registry:           deps.Registry,
 		issuer:             issuer,
 		sessions:           sessions,
+		revocations:        revocations,
 		methodRoutes:       deps.MethodRoutes,
 		nowFunc:            func() time.Time { return time.Now().UTC() },
 		credentialLifetime: 365 * 24 * time.Hour,

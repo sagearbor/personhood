@@ -198,6 +198,23 @@ print("\n".join(drops))
   fi
 fi
 
+# Optional admin token for POST /v1/admin/revoke. Attached only when the
+# secret exists; create it once with
+#   openssl rand -base64 32 | tr -d '\n' | gcloud secrets create personhood-admin-token --data-file=- --project $PROJECT
+# (--set-secrets replaces the whole secret set, so both are always passed).
+ADMIN_SECRET_NAME="${ADMIN_SECRET_NAME:-personhood-admin-token}"
+SECRETS="ISSUER_ED25519_SK_B64=${SECRET_NAME}:latest"
+if gcloud secrets describe "$ADMIN_SECRET_NAME" --project "$PROJECT" >/dev/null 2>&1; then
+  gcloud secrets add-iam-policy-binding "$ADMIN_SECRET_NAME" \
+    --project "$PROJECT" \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="roles/secretmanager.secretAccessor" >/dev/null
+  SECRETS="${SECRETS},ADMIN_TOKEN=${ADMIN_SECRET_NAME}:latest"
+  echo "==> admin token: attaching secret $ADMIN_SECRET_NAME (POST /v1/admin/revoke on)"
+else
+  echo "==> admin token: no secret $ADMIN_SECRET_NAME, admin routes stay off"
+fi
+
 echo "==> deploying $SERVICE to $REGION (source build)"
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT" \
@@ -206,7 +223,7 @@ gcloud run deploy "$SERVICE" \
   --allow-unauthenticated \
   --memory 256Mi \
   --max-instances 1 \
-  --set-secrets "ISSUER_ED25519_SK_B64=${SECRET_NAME}:latest" \
+  --set-secrets "$SECRETS" \
   --set-env-vars "^@^${ENV_VARS}"
 
 echo "==> smoke-testing $SERVER_PUBLIC_URL"

@@ -34,6 +34,10 @@ Usage: bash scripts/e2e-remote.sh <issuer-url> [invite-code]
 
 Env:
   E2E_KEEP=1    keep the temp work dir + built binaries on exit; path is printed.
+  PERSONHOOD_ADMIN_TOKEN
+                optional; when set, the run also revokes the credential it just
+                got (POST /v1/admin/revoke) and checks that round1-email.yaml
+                now rejects it with code revoked. Never printed.
 EOF
 }
 
@@ -146,6 +150,28 @@ set -e
 echo "exit $RC2 :: $(head -c 200 "$WORK/v2.txt" | tr '\n' ' ')"
 [[ "$RC2" -eq 1 ]] || die "default-floor.yaml should have been rejected (exit 1), got $RC2"
 grep -q anchor_missing "$WORK/v2.txt" || die "expected code anchor_missing, got: $(cat "$WORK/v2.txt")"
+
+if [[ -n "${PERSONHOOD_ADMIN_TOKEN:-}" ]]; then
+  echo "== revoke via POST /v1/admin/revoke, then round1-email.yaml must FAIL with revoked =="
+  CRED_ID=$(jget "$WORK/credential.json" id)
+  # The token goes through a header file so it never appears in argv.
+  printf 'Authorization: Bearer %s\n' "$PERSONHOOD_ADMIN_TOKEN" >"$WORK/auth.hdr"
+  curl -sf -X POST "$BASE/v1/admin/revoke" -H @"$WORK/auth.hdr" -H 'Content-Type: application/json' \
+    -d "{\"credential_id\":\"$CRED_ID\"}" >"$WORK/revoke.json" || die "admin revoke failed"
+  rm -f "$WORK/auth.hdr"
+  echo "revoked status_list_index=$(jget "$WORK/revoke.json" status_list_index)"
+  # The issuer caches the revoked set for up to 30s.
+  for i in 1 2 3 4 5 6 7; do
+    set +e
+    "$WORK/verify" -cred "$WORK/credential.json" -policy "$ROOT/docs/policies/round1-email.yaml" -issuer-url "$BASE" >"$WORK/v3.txt" 2>&1
+    RC3=$?
+    set -e
+    grep -q '"code": "revoked"' "$WORK/v3.txt" && break
+    sleep 6
+  done
+  echo "exit $RC3 :: $(head -c 200 "$WORK/v3.txt" | tr '\n' ' ')"
+  [[ "$RC3" -eq 1 ]] && grep -q '"code": "revoked"' "$WORK/v3.txt" || die "revoked credential was not rejected with code revoked"
+fi
 
 [[ "${E2E_KEEP:-0}" == "1" ]] && echo "credential: $WORK/credential.json"
 echo

@@ -126,3 +126,23 @@ func TestIntegration_MultipleCollectionsIsolated(t *testing.T) {
 		t.Fatalf("Get coll-a: got=%q found=%v err=%v", got, found, err)
 	}
 }
+
+func TestIntegration_CreateRefusesExisting(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	id := uniqueID(t)
+	t.Cleanup(func() { _ = c.Del(ctx, "test-coll", id) })
+
+	created, err := c.Create(ctx, "test-coll", id, []byte("first"))
+	if err != nil || !created {
+		t.Fatalf("first Create: created=%v err=%v, want created", created, err)
+	}
+	created, err = c.Create(ctx, "test-coll", id, []byte("second"))
+	if err != nil || created {
+		t.Fatalf("second Create: created=%v err=%v, want created=false, nil", created, err)
+	}
+	got, found, err := c.Get(ctx, "test-coll", id)
+	if err != nil || !found || string(got) != "first" {
+		t.Fatalf("Get after Create: %q found=%v err=%v, want \"first\"", got, found, err)
+	}
+}

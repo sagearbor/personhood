@@ -31,6 +31,9 @@ jobs:
       ISSUER: https://personhood-issuer-664594784582.us-central1.run.app
       WEB_URL: https://personhood-web.web.app
       PERSONHOOD_INVITE_CODE: ${{ secrets.PERSONHOOD_INVITE_CODE }}
+      # Optional: when set, e2e-remote also revokes its own credential and
+      # checks verifiers reject it.
+      PERSONHOOD_ADMIN_TOKEN: ${{ secrets.PERSONHOOD_ADMIN_TOKEN }}
     steps:
       - name: Skip without an invite code
         id: gate

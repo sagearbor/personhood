@@ -26,7 +26,8 @@ Last checked: 2026-10-20, against issuer revision `personhood-issuer-00005`
 |---|---|---|
 | Session record: holder DID and key, verified method IDs, strengths, timestamps, attestation digests, issued credential ID | Firestore `personhood-sessions` | 60-minute TTL, enforced only on read. See Gaps. |
 | **The credential itself** | Returned once to the browser. Not stored by the issuer: only its ID goes on the session record. | Held by the user (on-device storage, a downloaded file, or a share). It expires after 1 year. |
-| Revocation status list | In memory, served at `/v1/status-list/default` | Process lifetime |
+| Status-list slot per credential: credential ID and a random slot number | Firestore `personhood-status-slots`, `personhood-credential-status` (keyed by a hash of the credential ID) | Indefinitely, so the credential stays revocable until it expires (1 year). No email or key is stored there. |
+| Revoked slot numbers | Firestore `personhood-status-lists/default`, served publicly at `/v1/status-list/default` | Indefinitely. The public list shows only which slot numbers are revoked. |
 
 ## Logs
 
