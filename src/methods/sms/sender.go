@@ -21,7 +21,8 @@ type Sender interface {
 // LogSender writes the SMS body to its logger instead of contacting a carrier.
 // Useful for dev, tests, and demos.
 //
-// The OTP is logged in clear text — this is intentional for dev mode. Do NOT
+// The OTP is logged in clear text — this is intentional for dev mode; the
+// phone number is masked to its last two digits. Do NOT
 // use LogSender in any environment where the logs are accessible to anyone
 // other than the operator.
 type LogSender struct {
@@ -40,6 +41,20 @@ func (s *LogSender) Send(_ context.Context, toPhone string, body string) error {
 	if logger == nil {
 		logger = log.Default()
 	}
-	logger.Printf("sms: would send to %s: %s", toPhone, body)
+	logger.Printf("sms: would send to %s: %s", MaskPhone(toPhone), body)
 	return nil
+}
+
+// MaskPhone keeps only the last two digits: "+15555550123" -> "***23".
+func MaskPhone(phone string) string {
+	var digits []rune
+	for _, r := range phone {
+		if r >= '0' && r <= '9' {
+			digits = append(digits, r)
+		}
+	}
+	if len(digits) < 2 {
+		return "***"
+	}
+	return "***" + string(digits[len(digits)-2:])
 }

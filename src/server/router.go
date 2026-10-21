@@ -1,9 +1,14 @@
 package server
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -93,13 +98,81 @@ func (s *Server) Router() http.Handler {
 // Middleware
 // ----------------------------------------------------------------------------
 
+// requestLogger writes one JSON line per request in the shape Cloud Logging
+// parses into a structured entry (severity + httpRequest), so the console
+// can filter by status and alert on ERROR without a log-based parser.
+//
+// It logs the chi route pattern, never the raw path: GET
+// /v1/sessions/{sessionId} carries a bearer session ID in the path, and the
+// magic-link route carries its token in the query string.
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		log.Printf("%s %s %d %s", r.Method, r.URL.Path, sw.status, time.Since(start).Truncate(time.Millisecond))
+		writeRequestLog(os.Stdout, r, sw.status, time.Since(start))
 	})
+}
+
+type requestLogEntry struct {
+	Severity    string         `json:"severity"`
+	Message     string         `json:"message"`
+	HTTPRequest httpRequestLog `json:"httpRequest"`
+	Trace       string         `json:"trace,omitempty"`
+}
+
+type httpRequestLog struct {
+	RequestMethod string `json:"requestMethod"`
+	RequestURL    string `json:"requestUrl"`
+	Status        int    `json:"status"`
+	Latency       string `json:"latency"`
+}
+
+var logMu sync.Mutex
+
+func writeRequestLog(out io.Writer, r *http.Request, status int, elapsed time.Duration) {
+	route := routePattern(r)
+	severity := "INFO"
+	switch {
+	case status >= 500:
+		severity = "ERROR"
+	case status >= 400:
+		severity = "WARNING"
+	}
+	entry := requestLogEntry{
+		Severity: severity,
+		Message:  fmt.Sprintf("%s %s %d %s", r.Method, route, status, elapsed.Truncate(time.Millisecond)),
+		HTTPRequest: httpRequestLog{
+			RequestMethod: r.Method,
+			RequestURL:    route,
+			Status:        status,
+			Latency:       fmt.Sprintf("%.3fs", elapsed.Seconds()),
+		},
+	}
+	// Cloud Run sets X-Cloud-Trace-Context: TRACE_ID/SPAN_ID;o=1. Passing the
+	// trace ID through groups this line with Cloud Run's own request log.
+	if tc := r.Header.Get("X-Cloud-Trace-Context"); tc != "" {
+		entry.Trace, _, _ = strings.Cut(tc, "/")
+	}
+	b, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	logMu.Lock()
+	defer logMu.Unlock()
+	_, _ = out.Write(append(b, '\n'))
+}
+
+// routePattern returns the matched chi pattern (e.g.
+// "/v1/sessions/{sessionId}"), or "unmatched" for a 404 so arbitrary
+// client-chosen paths never reach the log.
+func routePattern(r *http.Request) string {
+	if rc := chi.RouteContext(r.Context()); rc != nil {
+		if p := rc.RoutePattern(); p != "" {
+			return p
+		}
+	}
+	return "unmatched"
 }
 
 // corsMiddleware adds CORS headers permissive enough for the configured
@@ -115,6 +188,9 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 			w.Header().Set("Access-Control-Max-Age", "300")
+			// Retry-After is not CORS-safelisted; without this the web app
+			// can't read how long a 429 asks it to wait.
+			w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

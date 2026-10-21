@@ -62,6 +62,10 @@ type Server struct {
 	// can see at a glance whether real mail is leaving the box.
 	emailDelivery string
 
+	// smsDelivery is emailDelivery's counterpart for SMS (see
+	// Dependencies.SMSSenderKind).
+	smsDelivery string
+
 	// nowFunc is overridden in tests to make ceremony timestamps deterministic.
 	// Default is time.Now.UTC.
 	nowFunc func() time.Time
@@ -98,6 +102,12 @@ type Dependencies struct {
 	// Empty (the default, e.g. when a test injects its own Sender) is
 	// reported as email.SenderKindUnknown on GET /v1/config.
 	EmailSenderKind string
+
+	// SMSSenderKind is EmailSenderKind's counterpart for the `sms` method:
+	// SMSDeliveryLog when codes are only written to the server log (no
+	// Twilio), so a client knows a phone number would get no message.
+	// Surfaced on GET /v1/config as sms_delivery.
+	SMSSenderKind string
 }
 
 // NewServer constructs a Server from cfg and deps. It returns an error if cfg
@@ -143,6 +153,7 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 	return &Server{
 		cfg:                cfg,
 		emailDelivery:      emailDelivery,
+		smsDelivery:        firstNonEmpty(deps.SMSSenderKind, SMSDeliveryUnknown),
 		issuerDID:          issuerDID,
 		issuerVMethodID:    vMethod,
 		issuerPublicKey:    pub,
@@ -202,7 +213,7 @@ func (s *Server) SetCredentialLifetime(d time.Duration) {
 // any extra anchor methods (e.g. government-id-liveness — see
 // BuildDependencies).
 func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
-	reg, _, err := defaultMethods(magicLinkBaseURL)
+	reg, _, _, err := defaultMethods(magicLinkBaseURL)
 	return reg, err
 }
 
@@ -210,7 +221,7 @@ func DefaultMethods(magicLinkBaseURL string) (*registry.Registry, error) {
 // needs: which email Sender the env-aware factory actually picked. Returned
 // separately rather than calling NewSenderFromEnv a second time, so the
 // reported kind can never disagree with the Sender in the registry.
-func defaultMethods(magicLinkBaseURL string) (*registry.Registry, string, error) {
+func defaultMethods(magicLinkBaseURL string) (*registry.Registry, string, string, error) {
 	reg := registry.New()
 
 	// Sender selection is delegated to the method packages' env-aware
@@ -221,7 +232,7 @@ func defaultMethods(magicLinkBaseURL string) (*registry.Registry, string, error)
 	// an in-memory one (the default) otherwise.
 	emailStore, err := emailmethod.NewTokenStoreFromEnv()
 	if err != nil {
-		return nil, "", fmt.Errorf("email: token store: %w", err)
+		return nil, "", "", fmt.Errorf("email: token store: %w", err)
 	}
 	emailSender := emailmethod.NewSenderFromEnv()
 	emailMethod := emailmethod.NewMethod(
@@ -230,21 +241,22 @@ func defaultMethods(magicLinkBaseURL string) (*registry.Registry, string, error)
 		emailStore,
 	)
 	if err := reg.Register(emailMethod); err != nil {
-		return nil, "", fmt.Errorf("register email: %w", err)
+		return nil, "", "", fmt.Errorf("register email: %w", err)
 	}
 
 	smsStore, err := smsmethod.NewOTPStoreFromEnv()
 	if err != nil {
-		return nil, "", fmt.Errorf("sms: otp store: %w", err)
+		return nil, "", "", fmt.Errorf("sms: otp store: %w", err)
 	}
+	smsSender := smsmethod.NewSenderFromEnv()
 	smsMethodPlugin := smsmethod.NewMethod(
-		smsmethod.NewSenderFromEnv(),
+		smsSender,
 		smsStore,
 	)
 	if err := reg.Register(smsMethodPlugin); err != nil {
-		return nil, "", fmt.Errorf("register sms: %w", err)
+		return nil, "", "", fmt.Errorf("register sms: %w", err)
 	}
-	return reg, emailmethod.SenderKind(emailSender), nil
+	return reg, emailmethod.SenderKind(emailSender), smsSenderKind(smsSender), nil
 }
 
 // BuildDependencies assembles the full Dependencies struct for a v0.1
@@ -262,11 +274,11 @@ func defaultMethods(magicLinkBaseURL string) (*registry.Registry, string, error)
 // redirect-uri so the user lands back on the web app after completing
 // verification. Pass "" to omit.
 func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error) {
-	reg, emailSenderKind, err := defaultMethods(magicLinkBaseURL)
+	reg, emailSenderKind, smsKind, err := defaultMethods(magicLinkBaseURL)
 	if err != nil {
 		return Dependencies{}, err
 	}
-	deps := Dependencies{Registry: reg, EmailSenderKind: emailSenderKind}
+	deps := Dependencies{Registry: reg, EmailSenderKind: emailSenderKind, SMSSenderKind: smsKind}
 
 	apiKey := os.Getenv("PERSONA_API_KEY")
 	templateID := os.Getenv("PERSONA_TEMPLATE_ID")
@@ -507,6 +519,20 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 	}
 
 	return deps, nil
+}
+
+// SMSDelivery* are the values GET /v1/config reports as sms_delivery.
+const (
+	SMSDeliveryLog     = "log"
+	SMSDeliveryTwilio  = "twilio"
+	SMSDeliveryUnknown = "unknown"
+)
+
+func smsSenderKind(s smsmethod.Sender) string {
+	if _, ok := s.(*smsmethod.LogSender); ok {
+		return SMSDeliveryLog
+	}
+	return SMSDeliveryTwilio
 }
 
 // smsTierSenderAdapter bridges the sms module's Sender to the phone-carrier-tier
