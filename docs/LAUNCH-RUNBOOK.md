@@ -11,14 +11,18 @@ launch itself.
 | Web | https://personhood-web.web.app |
 | Issuer | https://personhood-issuer-664594784582.us-central1.run.app |
 | Issuer DID | `did:web:personhood-issuer-664594784582.us-central1.run.app`, key `x=AB3aeJhjKNB7FvsX2QjsSMKbceYdAyS2KduSLj7ZjMY` |
-| Relying party | OpenLine seed https://openline-seed-664594784582.us-central1.run.app (pins the key above) |
+| Relying party | OpenLine seed https://openline-seed-664594784582.us-central1.run.app (pins the key above); OpenLine wallet https://openline-wallet.web.app enrolls directly (allowed CORS origin) |
 
 ## 0. Ground rules
 
-- **`deploy-cloudrun.sh` replaces every env var** (`--set-env-vars`). If you
-  leave out `INVITE_CODE`, the gate turns off. If you leave out
-  `DEV_EXPOSE_CHALLENGE_SECRETS`, it defaults to `1` (test mode). Always pass
-  the full intended set.
+- **`deploy-cloudrun.sh` replaces every env var** (`--set-env-vars`). It now
+  refuses to deploy if that would drop a variable or a CORS origin the live
+  service has (`ALLOW_ENV_DROP=1` overrides). `WEB_ORIGIN` is a
+  comma-separated list. Today it is
+  `https://personhood-web.web.app,https://openline-wallet.web.app`, because the
+  OpenLine wallet enrolls users directly from the browser.
+  `DEV_EXPOSE_CHALLENGE_SECRETS` still defaults to `1` (test mode) when it is
+  left unset.
 - **Never rotate the issuer key** (`personhood-issuer-key` in Secret Manager)
   on launch day. OpenLine pins it, so a new key makes every claim fail until
   OpenLine is redeployed. `scripts/e2e-openline.sh` catches a mismatch.
