@@ -55,6 +55,11 @@ func (s *FirestoreSessionStore) write(ctx context.Context, rec sessionRecord) er
 }
 
 func (s *FirestoreSessionStore) read(ctx context.Context, id string) (sessionRecord, error) {
+	// An empty or odd id would otherwise reach Firestore as a different path
+	// (an empty one lists the whole collection).
+	if !validSessionID(id) {
+		return sessionRecord{}, ErrSessionNotFound
+	}
 	raw, found, err := s.client.Get(ctx, firestoreSessionCollection, id)
 	if err != nil {
 		return sessionRecord{}, fmt.Errorf("server: firestore session read: %w", err)

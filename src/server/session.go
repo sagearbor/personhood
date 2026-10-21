@@ -298,6 +298,20 @@ func (s *InMemorySessionStore) MarkIssued(sessionID, credentialID string) error 
 	return nil
 }
 
+// validSessionID reports whether id has the shape randomSessionID produces:
+// 43 base64url characters. Stores check it before touching their backend.
+func validSessionID(id string) bool {
+	if len(id) != 43 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
 // randomSessionID returns a 32-byte base64url (no padding) random string.
 func randomSessionID() (string, error) {
 	buf := make([]byte, 32)

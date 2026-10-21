@@ -116,6 +116,11 @@ func (l *rateLimiter) allow(client string, c rateClass) (bool, time.Duration) {
 
 	b, ok := l.buckets[key]
 	if !ok {
+		// Bound memory: with this many distinct recent clients the issuer
+		// is being flooded, and refusing new ones beats running out of RAM.
+		if len(l.buckets) >= maxBuckets {
+			return false, time.Minute
+		}
 		b = &bucket{tokens: burst, last: now}
 		l.buckets[key] = b
 	}
@@ -128,6 +133,9 @@ func (l *rateLimiter) allow(client string, c rateClass) (bool, time.Duration) {
 	wait := time.Duration((1 - b.tokens) / perSec * float64(time.Second))
 	return false, wait
 }
+
+// maxBuckets caps the limiter's map (about 100 bytes a bucket, so ~10 MB).
+const maxBuckets = 100_000
 
 // sweepLocked drops buckets idle long enough to have refilled completely, so
 // the map's size tracks recently active clients rather than every IP ever
@@ -191,6 +199,17 @@ func clientIP(r *http.Request, trustedHops int) string {
 	return host
 }
 
+// limiterKey groups IPv6 clients by /64, the smallest block a home or
+// mobile network is normally given, so rotating addresses inside one
+// allocation doesn't get a fresh bucket each time. IPv4 is keyed as is.
+func limiterKey(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() != nil {
+		return ip
+	}
+	return parsed.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 func (l *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, limited := classify(r)
@@ -198,7 +217,7 @@ func (l *rateLimiter) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ok, wait := l.allow(clientIP(r, l.cfg.TrustedProxyHops), c)
+		ok, wait := l.allow(limiterKey(clientIP(r, l.cfg.TrustedProxyHops)), c)
 		if !ok {
 			secs := int(math.Ceil(wait.Seconds()))
 			if secs < 1 {

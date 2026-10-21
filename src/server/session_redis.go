@@ -110,6 +110,9 @@ func (s *RedisSessionStore) write(ctx context.Context, rec sessionRecord) error 
 }
 
 func (s *RedisSessionStore) read(ctx context.Context, id string) (sessionRecord, error) {
+	if !validSessionID(id) {
+		return sessionRecord{}, ErrSessionNotFound
+	}
 	raw, found, err := s.client.Get(ctx, sessionRedisKey(id))
 	if err != nil {
 		return sessionRecord{}, fmt.Errorf("server: redis session read: %w", err)
