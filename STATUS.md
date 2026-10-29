@@ -23,6 +23,11 @@ providers the disposable list misses) or many SIMs are still many voters; an
 anchor method is what closes that. Rotating `IDENTIFIER_HMAC_KEY` forgets
 every binding, so it must never be rotated.
 
+Deployed 2026-10-29 as `personhood-issuer-00012-2x5` (same signing key; invite
+gate and test mode still ON). `/v1/config` reports `identifier_dedup: true`;
+the live e2e run (remote with revoke, OpenLine handshake incl. same-email
+same-commitment, phone check) passed.
+
 ## Round-9 session summary (2026-10-21)
 
 Live issuer revision after this round: `personhood-issuer-00011-fs5` (same
