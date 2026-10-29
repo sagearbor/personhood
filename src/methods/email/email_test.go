@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -154,6 +155,14 @@ func TestBeginCompleteRoundtrip(t *testing.T) {
 	}
 	if res.VerifiedAt.IsZero() {
 		t.Errorf("VerifiedAt zero")
+	}
+	// The issuer keys the verified address for its per-identifier
+	// nullifier; it must never be serialized.
+	if res.VerifiedIdentifier != "alice@example.com" {
+		t.Errorf("VerifiedIdentifier = %q, want alice@example.com", res.VerifiedIdentifier)
+	}
+	if b, _ := json.Marshal(res); strings.Contains(string(b), "alice") {
+		t.Errorf("MethodResult JSON leaks the address: %s", b)
 	}
 }
 

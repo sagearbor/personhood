@@ -243,6 +243,9 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 		MethodID:          MethodID,
 		VerifiedAt:        time.Now().UTC(),
 		AttestationDigest: digest,
+		// In-memory only (json:"-"); the issuer keys it for the
+		// per-identifier nullifier and drops it.
+		VerifiedIdentifier: emailAddr,
 	}, nil
 }
 
