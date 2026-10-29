@@ -215,6 +215,24 @@ else
   echo "==> admin token: no secret $ADMIN_SECRET_NAME, admin routes stay off"
 fi
 
+# Identifier HMAC key: turns on per-identifier nullifier seeds, so one email
+# inbox or phone is one voter (src/server/identifier.go). Attached only when
+# the secret exists; create it ONCE with
+#   openssl rand -base64 32 | tr -d '\n' | gcloud secrets create personhood-identifier-hmac-key --data-file=- --project $PROJECT
+# and never rotate it: a new key forgets every existing binding, and every
+# inbox could enroll once more as a new person.
+IDENTIFIER_SECRET_NAME="${IDENTIFIER_SECRET_NAME:-personhood-identifier-hmac-key}"
+if gcloud secrets describe "$IDENTIFIER_SECRET_NAME" --project "$PROJECT" >/dev/null 2>&1; then
+  gcloud secrets add-iam-policy-binding "$IDENTIFIER_SECRET_NAME" \
+    --project "$PROJECT" \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="roles/secretmanager.secretAccessor" >/dev/null
+  SECRETS="${SECRETS},IDENTIFIER_HMAC_KEY=${IDENTIFIER_SECRET_NAME}:latest"
+  echo "==> identifier key: attaching secret $IDENTIFIER_SECRET_NAME (one inbox/phone = one nullifier seed)"
+else
+  echo "==> identifier key: no secret $IDENTIFIER_SECRET_NAME — WARNING: one inbox can enroll unlimited independent credentials" >&2
+fi
+
 echo "==> deploying $SERVICE to $REGION (source build)"
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT" \

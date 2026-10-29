@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -50,6 +51,12 @@ type Server struct {
 	issuer      *credential.Issuer
 	sessions    SessionStore
 	revocations RevocationStore
+
+	// identifierKeys and identifiers implement per-identifier nullifier
+	// seeds (identifier.go). Both nil when Config.IdentifierHMACKey is
+	// empty, which turns the feature off.
+	identifierKeys *identifierKeyer
+	identifiers    IdentifierStore
 
 	// methodRoutes carries additional HTTP handlers a method plugin needs
 	// the server to host (e.g. third-party webhook receivers). Populated by
@@ -151,6 +158,19 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		return nil, fmt.Errorf("server: revocation store: %w", err)
 	}
 
+	var keyer *identifierKeyer
+	var identifiers IdentifierStore
+	if len(cfg.IdentifierHMACKey) > 0 {
+		if keyer, err = newIdentifierKeyer(cfg.IdentifierHMACKey); err != nil {
+			return nil, err
+		}
+		if identifiers, err = NewIdentifierStoreFromEnv(); err != nil {
+			return nil, fmt.Errorf("server: identifier store: %w", err)
+		}
+	} else if os.Getenv("FIRESTORE_PROJECT_ID") != "" {
+		log.Printf(`{"severity":"WARNING","message":"%s is not set: one email inbox or phone can enroll any number of times and get an independent credential each time"}`, IdentifierKeyEnv)
+	}
+
 	emailDelivery := deps.EmailSenderKind
 	if emailDelivery == "" {
 		emailDelivery = emailmethod.SenderKindUnknown
@@ -168,6 +188,8 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		issuer:             issuer,
 		sessions:           sessions,
 		revocations:        revocations,
+		identifierKeys:     keyer,
+		identifiers:        identifiers,
 		methodRoutes:       deps.MethodRoutes,
 		nowFunc:            func() time.Time { return time.Now().UTC() },
 		credentialLifetime: 365 * 24 * time.Hour,

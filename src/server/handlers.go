@@ -109,6 +109,11 @@ type serverConfigResponse struct {
 	// log — a phone number entered here receives nothing), "twilio", or
 	// "unknown". The web app hides the SMS step when it is "log".
 	SMSDelivery string `json:"sms_delivery"`
+
+	// IdentifierDedup reports whether per-identifier nullifier seeds are on
+	// (IDENTIFIER_HMAC_KEY set): a second enrollment by the same email or
+	// phone gets the same nullifierBinding back instead of a new one.
+	IdentifierDedup bool `json:"identifier_dedup"`
 }
 
 // issueCredentialRequest is the JSON body of POST /v1/credentials/issue.
@@ -140,6 +145,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		ChallengeSecretsExposed: s.cfg.ExposeChallengeSecrets,
 		EmailDelivery:           s.emailDelivery,
 		SMSDelivery:             s.smsDelivery,
+		IdentifierDedup:         s.identifierKeys != nil,
 	})
 }
 
@@ -204,6 +210,17 @@ func (s *Server) handleBeginMethod(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusNotFound, "session_not_found", err.Error())
 		return
+	}
+
+	// With per-identifier seeds on, an identifier that has no single
+	// canonical form (a phone number without its country code) is refused
+	// before anything is sent: it could be enrolled again under another
+	// spelling as a different person.
+	if kind := identifierKindForMethod(methodID); kind != "" && s.identifierKeys != nil {
+		if _, err := normalizeIdentifier(kind, req.UserInput); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_identifier", err.Error())
+			return
+		}
 	}
 
 	cc := types.CeremonyContext{
@@ -313,7 +330,7 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if result.Success {
-		if recErr := s.sessions.RecordMethodResult(sess.ID, result, method.Metadata()); recErr != nil {
+		if recErr := s.recordVerified(sess.ID, methodID, result, method.Metadata()); recErr != nil {
 			writeError(w, http.StatusInternalServerError, "record_failed", recErr.Error())
 			return
 		}
@@ -374,7 +391,7 @@ func (s *Server) handleEmailMagicLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if result.Success {
-		if recErr := s.sessions.RecordMethodResult(sess.ID, result, method.Metadata()); recErr != nil {
+		if recErr := s.recordVerified(sess.ID, methodID, result, method.Metadata()); recErr != nil {
 			writeError(w, http.StatusInternalServerError, "record_failed", recErr.Error())
 			return
 		}
@@ -426,7 +443,33 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	// and unique across people. See NullifierBindingForBiometricCommitment's
 	// doc comment for why this matters for OpenLine's airdrop-test UBI/vote
 	// use cases.
-	if bio := biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.MethodID); bio != "" {
+	//
+	// Between the two: when per-identifier seeds are on and the session
+	// verified an email or phone, the binding comes from that identifier's
+	// seed, so the same inbox always gets the same binding no matter how
+	// many device keys it enrolls with (identifier.go).
+	bio := biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.MethodID)
+	if bio == "" && s.identifierKeys != nil {
+		for _, vm := range view.VerifiedMethods {
+			if kind := identifierKindForMethod(vm.MethodID); kind != "" && view.IdentifierKeys[kind] == "" {
+				// Verified before this issuer keyed identifiers (an
+				// in-flight session across the deploy). Issuing would
+				// hand out an unbound, repeatable credential.
+				writeError(w, http.StatusConflict, "reverify_required",
+					"this session's "+kind+" was verified before identifier binding was on; start a new enrollment")
+				return
+			}
+		}
+		if len(view.IdentifierKeys) > 0 {
+			seed, err := resolveIdentifierSeed(r.Context(), s.identifiers, view.IdentifierKeys)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "identifier_seed_failed", err.Error())
+				return
+			}
+			nullifierBinding = NullifierBindingForIdentifierSeed(seed)
+		}
+	}
+	if bio != "" {
 		nullifierBinding = NullifierBindingForBiometricCommitment(bio)
 	}
 	// Every credential gets a random slot in the status list so it can be
@@ -667,3 +710,27 @@ var (
 <p class="muted">Personhood — proof-of-personhood reference issuer</p>
 </body></html>`))
 )
+
+// recordVerified stores a successful method result on the session. When
+// per-identifier seeds are on and the method verified an email or phone, it
+// first records the identifier's keyed hash (never the identifier itself),
+// so issuance can bind the credential to it. The key is written before the
+// method result: if the second write fails the client retries the
+// ceremony, and a key without its method is never used on its own.
+func (s *Server) recordVerified(sessionID, methodID string, result types.MethodResult, meta types.MethodMetadata) error {
+	raw := result.VerifiedIdentifier
+	result.VerifiedIdentifier = ""
+	if kind := identifierKindForMethod(methodID); kind != "" && s.identifierKeys != nil {
+		if raw == "" {
+			return fmt.Errorf("method %q verified no identifier; cannot bind the credential to it", methodID)
+		}
+		normalized, err := normalizeIdentifier(kind, raw)
+		if err != nil {
+			return err
+		}
+		if err := s.sessions.SetIdentifierKey(sessionID, kind, s.identifierKeys.Key(kind, normalized)); err != nil {
+			return err
+		}
+	}
+	return s.sessions.RecordMethodResult(sessionID, result, meta)
+}

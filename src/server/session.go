@@ -64,6 +64,14 @@ type SessionStore interface {
 	// blocking future RecordMethodResult / issue calls. Returns
 	// ErrSessionAlreadyIssued if already marked.
 	MarkIssued(sessionID, credentialID string) error
+
+	// SetIdentifierKey records the keyed hash (see identifierKeyer) of an
+	// identifier this session proved control of, under its kind ("email" or
+	// "phone"). A later key of the same kind replaces the earlier one, the
+	// same way a re-run ceremony replaces its VerifiedMethod. The raw
+	// identifier never reaches the store. Returns ErrSessionAlreadyIssued
+	// once the session has issued.
+	SetIdentifierKey(sessionID, kind, key string) error
 }
 
 // SessionView is the lockless, JSON-friendly snapshot every SessionStore
@@ -80,6 +88,11 @@ type SessionView struct {
 	VerifiedMethods    []types.VerifiedMethod `json:"verified_methods"`
 	AnchorMethodID     *string                `json:"anchor_method_id,omitempty"`
 	IssuedCredentialID string                 `json:"issued_credential_id,omitempty"`
+	// IdentifierKeys maps identifier kind ("email", "phone") to the keyed
+	// hash of the identifier verified in this session. Server-internal:
+	// json:"-" keeps it out of every API response (the stores persist it
+	// through sessionRecord).
+	IdentifierKeys map[string]string `json:"-"`
 }
 
 // NewSessionStoreFromEnv returns a FirestoreSessionStore when
@@ -127,6 +140,7 @@ type session struct {
 	verifiedMethods    []types.VerifiedMethod
 	anchorMethodID     *string
 	issuedCredentialID string
+	identifierKeys     map[string]string
 
 	mu sync.Mutex
 }
@@ -158,6 +172,7 @@ func (sess *session) view() SessionView {
 		VerifiedMethods:    methodsCopy,
 		AnchorMethodID:     anchor,
 		IssuedCredentialID: sess.issuedCredentialID,
+		IdentifierKeys:     copyStringMap(sess.identifierKeys),
 	}
 }
 
@@ -296,6 +311,36 @@ func (s *InMemorySessionStore) MarkIssued(sessionID, credentialID string) error 
 	}
 	sess.issuedCredentialID = credentialID
 	return nil
+}
+
+// SetIdentifierKey implements SessionStore.
+func (s *InMemorySessionStore) SetIdentifierKey(sessionID, kind, key string) error {
+	sess, err := s.get(sessionID)
+	if err != nil {
+		return err
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.issuedCredentialID != "" {
+		return ErrSessionAlreadyIssued
+	}
+	if sess.identifierKeys == nil {
+		sess.identifierKeys = map[string]string{}
+	}
+	sess.identifierKeys[kind] = key
+	return nil
+}
+
+// copyStringMap returns a copy of m, or nil when m is empty.
+func copyStringMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // validSessionID reports whether id has the shape randomSessionID produces:

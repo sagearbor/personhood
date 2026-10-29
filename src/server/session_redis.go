@@ -30,6 +30,7 @@ type sessionRecord struct {
 	VerifiedMethods    []types.VerifiedMethod `json:"verified_methods"`
 	AnchorMethodID     *string                `json:"anchor_method_id,omitempty"`
 	IssuedCredentialID string                 `json:"issued_credential_id,omitempty"`
+	IdentifierKeys     map[string]string      `json:"identifier_keys,omitempty"`
 }
 
 func (r sessionRecord) view() SessionView {
@@ -56,7 +57,34 @@ func (r sessionRecord) view() SessionView {
 		VerifiedMethods:    methodsCopy,
 		AnchorMethodID:     anchor,
 		IssuedCredentialID: r.IssuedCredentialID,
+		IdentifierKeys:     copyStringMap(r.IdentifierKeys),
 	}
+}
+
+// setIdentifierKey is SetIdentifierKey's record mutation, shared by the
+// Redis and Firestore stores.
+func (r *sessionRecord) setIdentifierKey(kind, key string) error {
+	if r.IssuedCredentialID != "" {
+		return ErrSessionAlreadyIssued
+	}
+	if r.IdentifierKeys == nil {
+		r.IdentifierKeys = map[string]string{}
+	}
+	r.IdentifierKeys[kind] = key
+	return nil
+}
+
+// SetIdentifierKey implements SessionStore.
+func (s *RedisSessionStore) SetIdentifierKey(sessionID, kind, key string) error {
+	ctx := context.Background()
+	rec, err := s.read(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if err := rec.setIdentifierKey(kind, key); err != nil {
+		return err
+	}
+	return s.write(ctx, rec)
 }
 
 // RedisSessionStore is a Redis-backed SessionStore, selected via REDIS_URL

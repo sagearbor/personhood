@@ -511,4 +511,13 @@ type MethodResult struct {
 	// ErrorReason is a short machine-readable reason for failure. Set when
 	// Success is false; empty otherwise.
 	ErrorReason string `json:"error_reason,omitempty"`
+
+	// VerifiedIdentifier is the raw identifier this ceremony proved control
+	// of: the email address for email methods, the phone number for SMS
+	// methods, empty for everything else. It lets the issuer key a
+	// per-identifier nullifier seed (one inbox or phone, one voter). It is
+	// in-memory only: never serialized (json:"-"), never written to a
+	// session store, never put on a credential. The issuer turns it into a
+	// keyed hash and drops it.
+	VerifiedIdentifier string `json:"-"`
 }

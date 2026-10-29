@@ -42,6 +42,23 @@ Write down the serving revision. It is your rollback target.
 
 Each switch is a separate deploy. Verify after each one (§3).
 
+0. **One inbox, one voter** (before any value-bearing vote). Create the
+   identifier HMAC key ONCE and redeploy; `deploy-cloudrun.sh` attaches it
+   when the secret exists:
+
+   ```bash
+   openssl rand -base64 32 | tr -d '\n' | gcloud secrets create personhood-identifier-hmac-key --data-file=- --project arborfam-hub
+   ```
+
+   Check `curl -s $ISSUER/v1/config` shows `"identifier_dedup":true`; the
+   `e2e-openline.sh` run in §3 then enrolls one email twice and checks both
+   credentials carry the same `nullifierBinding`. **Never rotate or delete
+   this secret**: a new key forgets every binding, and every inbox could
+   enroll once more as a new person. Deploy the issuer before OpenLine's
+   presentation-only node (openline PR), so the node never runs against an
+   issuer whose round-1 credentials it would key differently. Residual risk:
+   this caps credentials at one per inbox or phone, not one per human; many
+   throwaway inboxes are still many voters (`src/server/identifier.go`).
 1. **Real email** (STATUS.md 4b). Put the SMTP password in Secret Manager,
    not a plain env var, then deploy with `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/
    `SMTP_FROM` and `DEV_EXPOSE_CHALLENGE_SECRETS=0`. Send one real link to

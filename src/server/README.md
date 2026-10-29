@@ -112,6 +112,13 @@ show the user what mode they are in.
   one), but the list itself carries no signature yet. v0.2 signs it the same
   way credentials are signed. Revocations persist in Firestore when
   `FIRESTORE_PROJECT_ID` is set; otherwise they live in memory.
+- **One inbox or phone, one nullifier seed** (`identifier.go`): with
+  `IDENTIFIER_HMAC_KEY` set, each verified email/phone is normalized and
+  HMAC-keyed; the key indexes a random seed (Firestore
+  `personhood-identifier-seeds`, or memory) and the credential's
+  `nullifierBinding` derives from it, so re-enrolling the same inbox on a new
+  device key is a re-issue. Throwaway inboxes are still Sybil-able; only an
+  anchor method stops one person holding many.
 
 ## Tests
 

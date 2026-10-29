@@ -169,3 +169,16 @@ func (s *FirestoreSessionStore) MarkIssued(sessionID, credentialID string) error
 	rec.IssuedCredentialID = credentialID
 	return s.write(ctx, rec)
 }
+
+// SetIdentifierKey implements SessionStore.
+func (s *FirestoreSessionStore) SetIdentifierKey(sessionID, kind, key string) error {
+	ctx := context.Background()
+	rec, err := s.read(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if err := rec.setIdentifierKey(kind, key); err != nil {
+		return err
+	}
+	return s.write(ctx, rec)
+}

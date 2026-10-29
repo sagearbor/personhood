@@ -6,6 +6,23 @@
 
 ---
 
+## Round-10 (2026-10-29): one inbox, one voter
+
+Owner decision: the launch includes real one-person-one-vote voting (UBI
+payouts stay off), so the per-email uniqueness gap from round 9 is closed.
+Paired with openline's presentation-only vote/claim/proposal change.
+
+| Change | Path | What works |
+|---|---|---|
+| **Per-identifier nullifier seed** | `src/server/identifier.go`, `handlers.go`, `session*.go`, `config.go`, `pkg/types` (`MethodResult.VerifiedIdentifier`, `json:"-"`) | With `IDENTIFIER_HMAC_KEY` set (Secret Manager `personhood-identifier-hmac-key`, attached by `deploy-cloudrun.sh` when it exists), each email or phone a session verifies is normalized (lowercase; `+tag` dropped; gmail dots dropped and googlemail folded to gmail; phones must be E.164, refused at `/begin` otherwise) and keyed with HMAC-SHA256. The key indexes a random seed in Firestore `personhood-identifier-seeds` (create-only, so racing enrollments agree); the credential's `nullifierBinding` commitment is derived from that seed. A second enrollment by the same inbox, on any device key, gets the same commitment back, so OpenLine counts one voter. A session that verifies a known phone and a new email links the email to the phone's seed. Precedence: biometric anchor > identifier seed > device key. The raw address never reaches a store; `GET /v1/sessions` doesn't show the HMACs. `/v1/config` reports `identifier_dedup`. Sessions verified before the deploy get `409 reverify_required` at issue. Without the key nothing changes (a WARNING is logged on Firestore deployments). |
+| **e2e-openline uses presentations** | `scripts/e2e-openline.sh` | Every OpenLine call is now a Verifiable Presentation: the script makes a holder key (node:crypto ed25519), enrolls with it, signs a fresh `/personhood/challenge`. The tampered check presents a tampered credential with a valid holder signature. With `identifier_dedup` on it enrolls the same email twice and requires the same commitment. With `OPENLINE_E2E_CLAIM=1` it also requires a bare credential to get 403, and the re-enrolled credential to get 409 (same person). Needs `node` (CI already has it). |
+
+**Residual risk (documented, accepted):** this binds a credential to an inbox
+or a phone line, not a human. Many throwaway inboxes (catch-all domains,
+providers the disposable list misses) or many SIMs are still many voters; an
+anchor method is what closes that. Rotating `IDENTIFIER_HMAC_KEY` forgets
+every binding, so it must never be rotated.
+
 ## Round-9 session summary (2026-10-21)
 
 Live issuer revision after this round: `personhood-issuer-00011-fs5` (same
@@ -14,9 +31,8 @@ found the ip-asn hole below; everything it confirmed is fixed except the
 low-severity issue race and the per-email uniqueness gap, which is an owner
 decision (it changes what OpenLine deduplicates on).
 
-**Waiting on the owner (new this round):** a per-email nullifier, so one
-inbox counts as one voter (today one inbox can enroll again and again);
-how the live e2e works once test mode is off (a test-mode tagged revision
+**Waiting on the owner (new this round):** ~~a per-email nullifier~~ (done
+in round 10); how the live e2e works once test mode is off (a test-mode tagged revision
 would be a standing backdoor, so it was not built); Next.js 14 → 16 (npm
 audit flags 14.2.35; the app is a static export, which limits exposure).
 

@@ -96,6 +96,17 @@ type Config struct {
 	// Env: ADMIN_TOKEN.
 	AdminToken string
 
+	// IdentifierHMACKey, when set, turns on per-identifier nullifier seeds:
+	// each verified email or phone is normalized and keyed with
+	// HMAC-SHA256 under this secret, and a second enrollment by the same
+	// identifier gets the same nullifierBinding back (see identifier.go).
+	// Empty leaves it off, and one inbox can enroll as many "people" as it
+	// likes. Deployed from Secret Manager; never logged. Rotating it
+	// forgets every existing binding, so don't.
+	//
+	// Env: IDENTIFIER_HMAC_KEY (base64, at least 32 bytes decoded).
+	IdentifierHMACKey []byte
+
 	// RateLimit bounds per-client request rates (see RateLimitConfig). The
 	// zero value disables it; LoadConfigFromEnv enables
 	// DefaultRateLimitConfig unless RATE_LIMIT=off.
@@ -123,6 +134,9 @@ type Config struct {
 //     that has a public URL but no mail credential yet.
 //   - ADMIN_TOKEN                  default empty (admin routes off). Bearer
 //     token for POST /v1/admin/revoke.
+//   - IDENTIFIER_HMAC_KEY          default empty (per-identifier nullifier
+//     seeds off). Base64 secret of at least 32 bytes; see
+//     Config.IdentifierHMACKey.
 //   - RATE_LIMIT                   default on (DefaultRateLimitConfig);
 //     "off" disables per-client rate limiting (load tests only).
 //   - TRUSTED_PROXY_HOPS           default 0. Set 1 behind Cloud Run so the
@@ -155,6 +169,17 @@ func LoadConfigFromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("TRUSTED_PROXY_HOPS: want a non-negative integer, got %q", h)
 		}
 		cfg.RateLimit.TrustedProxyHops = n
+	}
+
+	if k := strings.TrimSpace(os.Getenv(IdentifierKeyEnv)); k != "" {
+		raw, err := decodeB64Tolerant(k)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: %w", IdentifierKeyEnv, err)
+		}
+		if len(raw) < minIdentifierKeyBytes {
+			return Config{}, fmt.Errorf("%s: want at least %d bytes, got %d (generate with `openssl rand -base64 32`)", IdentifierKeyEnv, minIdentifierKeyBytes, len(raw))
+		}
+		cfg.IdentifierHMACKey = raw
 	}
 
 	skB64 := os.Getenv("ISSUER_ED25519_SK_B64")
