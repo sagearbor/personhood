@@ -1,6 +1,6 @@
 # app/web — Personhood enrollment PWA
 
-A Next.js 14 App Router application that drives an end-user through the
+A Next.js 16 App Router application that drives an end-user through the
 Personhood enrollment ceremony: email magic link → SMS OTP → government ID +
 selfie (Persona) → issued W3C Verifiable Credential.
 

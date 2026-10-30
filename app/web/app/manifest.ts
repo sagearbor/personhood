@@ -1,7 +1,7 @@
 import type { MetadataRoute } from 'next';
 
 /**
- * Web app manifest. Served at /manifest.webmanifest. Next 14 builds the JSON
+ * Web app manifest. Served at /manifest.webmanifest. Next builds the JSON
  * automatically; consumers reference it via <link rel="manifest"> in the
  * root layout.
  *
@@ -9,6 +9,9 @@ import type { MetadataRoute } from 'next';
  * next/og.ImageResponse to render PNGs at build time, so we never commit
  * binary assets to git).
  */
+// Required under output: 'export' since Next 15 (route handlers default to dynamic).
+export const dynamic = 'force-static';
+
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: 'Personhood',
