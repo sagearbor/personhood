@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sagearbor/personhood/pkg/firestoreclient"
+	"github.com/sagearbor/personhood/pkg/redisclient"
 )
 
 // statusListSize is the number of slots in the issuer's default Status List
@@ -53,9 +54,9 @@ type RevocationStore interface {
 }
 
 // NewRevocationStoreFromEnv returns a Firestore-backed store when
-// FIRESTORE_PROJECT_ID is set, else an in-memory one. There is no Redis
-// backend: revocations held only in Redis or memory would vanish on restart,
-// so a Redis deployment keeps the in-memory store and says so in the log.
+// FIRESTORE_PROJECT_ID is set, a Redis-backed one when REDIS_URL is set
+// (the Redis server must persist to disk, as the issuer kit's does), else an
+// in-memory one that forgets revocations on restart.
 func NewRevocationStoreFromEnv() (RevocationStore, error) {
 	if projectID := os.Getenv("FIRESTORE_PROJECT_ID"); projectID != "" {
 		client, err := firestoreclient.New(projectID)
@@ -63,6 +64,13 @@ func NewRevocationStoreFromEnv() (RevocationStore, error) {
 			return nil, fmt.Errorf("server: FIRESTORE_PROJECT_ID: %w", err)
 		}
 		return NewFirestoreRevocationStore(client), nil
+	}
+	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+		client, err := redisclient.ParseURL(redisURL)
+		if err != nil {
+			return nil, fmt.Errorf("server: REDIS_URL: %w", err)
+		}
+		return NewRedisRevocationStore(client), nil
 	}
 	return NewInMemoryRevocationStore(), nil
 }

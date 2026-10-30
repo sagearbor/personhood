@@ -167,7 +167,7 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		if identifiers, err = NewIdentifierStoreFromEnv(); err != nil {
 			return nil, fmt.Errorf("server: identifier store: %w", err)
 		}
-	} else if os.Getenv("FIRESTORE_PROJECT_ID") != "" {
+	} else if os.Getenv("FIRESTORE_PROJECT_ID") != "" || os.Getenv("REDIS_URL") != "" {
 		log.Printf(`{"severity":"WARNING","message":"%s is not set: one email inbox or phone can enroll any number of times and get an independent credential each time"}`, IdentifierKeyEnv)
 	}
 

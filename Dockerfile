@@ -34,8 +34,11 @@ COPY sdk     sdk
 RUN cd src/server && go mod download
 
 # Compile with sendgrid + twilio so real senders are linked. CGO disabled so
-# we get a fully static binary that distroless can run.
-ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+# we get a fully static binary that distroless can run. TARGETARCH is filled
+# in by BuildKit (docker compose, buildx), so the issuer kit builds natively
+# on arm64 boxes too; Cloud Build's legacy builder leaves it empty -> amd64.
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64}
 RUN cd src/server && \
     go build -tags 'sendgrid twilio' -trimpath -ldflags="-s -w" \
       -o /out/personhood-server ./cmd/server

@@ -16,6 +16,9 @@ sdk/typescript
 
 # Docs and meta — never needed to compile the binary.
 docs
+# Scripts, including the issuer kit's generated issuer.env and backups
+# (they hold a signing key and must never enter the build context).
+scripts
 tmp
 tests
 *.md

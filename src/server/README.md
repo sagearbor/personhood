@@ -13,8 +13,16 @@ per-method state live in memory. Set `REDIS_URL` (e.g.
 DB index) to switch `SessionStore`, `email.TokenStore`, `sms.OTPStore`, and
 `government-id-liveness`'s `ResultStore` to Redis-backed implementations, so
 sessions and ceremony state survive restarts and are shared across
-horizontally scaled replicas. Unset (the default) keeps everything in
-memory — no code change, no Redis dependency for round-1-scale deployments.
+horizontally scaled replicas. The status-list slots, revocations and
+one-inbox-one-voter seeds move to Redis too (`revocation_redis.go`,
+`identifier_redis.go`); those must outlive restarts, so the Redis server needs
+disk persistence (the issuer kit, `scripts/issuer-kit/`, runs it with an
+append-only file). `FIRESTORE_PROJECT_ID` takes priority over `REDIS_URL`.
+Unset (the default) keeps everything in memory — no code change, no Redis
+dependency for round-1-scale deployments.
+
+To run an independent issuer on any server with Docker, see
+[docs/RUN_AN_ISSUER.md](../../docs/RUN_AN_ISSUER.md).
 
 ## Run locally
 
