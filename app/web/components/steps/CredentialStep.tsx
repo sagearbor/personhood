@@ -7,6 +7,7 @@ import type { Status } from '../StatusPill';
 import { friendlyError, isSessionExpired } from '@/lib/errors';
 import { issueCredential, type StartEnrollmentResponse, type Credential } from '@/lib/api';
 import { saveCredential, clearSession } from '@/lib/storage';
+import { signHolderMessage } from '@/lib/holderkey';
 import { registerDevicePasskey, isWebAuthnAvailable } from '@/lib/webauthn';
 import {
   CREDENTIAL_FILENAME,
@@ -94,7 +95,8 @@ export function CredentialStep({
     setStatus('pending');
     setStatusText('signing credential');
     try {
-      const { credential: cred } = await issueCredential(session.session_id);
+      const proof = session.holder_proof_message ? await signHolderMessage(session.holder_proof_message) : null;
+      const { credential: cred } = await issueCredential(session.session_id, proof ?? undefined);
       setStatus('ok');
       setStatusText('issued');
       onIssued(cred);

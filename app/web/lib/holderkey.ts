@@ -80,6 +80,27 @@ export async function getOrCreateHolderKeyPair(): Promise<HolderKeyPair | null> 
   }
 }
 
+/**
+ * signHolderMessage signs message (UTF-8) with the persisted holder private
+ * key and returns the base64 Ed25519 signature, or null when there is no
+ * holder key (the caller then issues without a proof, as before).
+ */
+export async function signHolderMessage(message: string): Promise<string | null> {
+  if (!isEd25519Available()) return null;
+  const pair = await loadHolderKeyPair();
+  if (!pair) return null;
+  const priv = await crypto.subtle.importKey('pkcs8', b64ToBuf(pair.privateKeyB64), ED25519_ALG, false, ['sign']);
+  const sig = await crypto.subtle.sign(ED25519_ALG, priv, new TextEncoder().encode(message));
+  return bufToB64(sig);
+}
+
+function b64ToBuf(b64: string): ArrayBuffer {
+  const s = atob(b64);
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+  return bytes.buffer;
+}
+
 function bufToB64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
   let s = '';

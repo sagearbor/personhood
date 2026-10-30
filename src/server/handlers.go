@@ -44,6 +44,10 @@ type startEnrollmentResponse struct {
 	IssuerDID        types.DID       `json:"issuer_did"`
 	ExpiresAt        time.Time       `json:"expires_at"`
 	AvailableMethods []methodSummary `json:"available_methods"`
+	// HolderProofMessage is set when the request declared a holder key: the
+	// exact UTF-8 string the client signs with that key and sends back as
+	// holder_proof_b64 at issuance (see holderpop.go).
+	HolderProofMessage string `json:"holder_proof_message,omitempty"`
 }
 
 // methodSummary is the projection of MethodMetadata returned to clients on
@@ -114,11 +118,20 @@ type serverConfigResponse struct {
 	// (IDENTIFIER_HMAC_KEY set): a second enrollment by the same email or
 	// phone gets the same nullifierBinding back instead of a new one.
 	IdentifierDedup bool `json:"identifier_dedup"`
+
+	// HolderPoPRequired reports whether issuance needs holder_proof_b64
+	// from sessions that declared a holder key (REQUIRE_HOLDER_POP).
+	HolderPoPRequired bool `json:"holder_pop_required"`
 }
 
 // issueCredentialRequest is the JSON body of POST /v1/credentials/issue.
 type issueCredentialRequest struct {
 	SessionID string `json:"session_id"`
+	// HolderProofB64 is an Ed25519 signature, by the session's holder key,
+	// over the session's holder_proof_message. Required when the server
+	// runs with RequireHolderPoP and the session declared a holder key;
+	// verified whenever present.
+	HolderProofB64 string `json:"holder_proof_b64,omitempty"`
 }
 
 type issueCredentialResponse struct {
@@ -146,6 +159,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		EmailDelivery:           s.emailDelivery,
 		SMSDelivery:             s.smsDelivery,
 		IdentifierDedup:         s.identifierKeys != nil,
+		HolderPoPRequired:       s.cfg.RequireHolderPoP,
 	})
 }
 
@@ -183,13 +197,17 @@ func (s *Server) handleStartEnrollment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, startEnrollmentResponse{
+	resp := startEnrollmentResponse{
 		SessionID:        view.ID,
 		HolderDID:        view.HolderDID,
 		IssuerDID:        s.issuerDID,
 		ExpiresAt:        view.ExpiresAt,
 		AvailableMethods: s.methodSummaries(),
-	})
+	}
+	if holderPub != nil {
+		resp.HolderProofMessage = HolderPoPMessage(s.issuerDID, view.ID)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleBeginMethod(w http.ResponseWriter, r *http.Request) {
@@ -425,6 +443,10 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	if len(view.VerifiedMethods) == 0 {
 		writeError(w, http.StatusUnprocessableEntity, "no_methods_completed",
 			"complete at least one method ceremony before requesting issuance")
+		return
+	}
+	if err := s.checkHolderPoP(view, req.HolderProofB64); err != nil {
+		writeError(w, http.StatusForbidden, err.code, err.message)
 		return
 	}
 

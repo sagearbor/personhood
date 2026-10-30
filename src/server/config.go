@@ -107,6 +107,14 @@ type Config struct {
 	// Env: IDENTIFIER_HMAC_KEY (base64, at least 32 bytes decoded).
 	IdentifierHMACKey []byte
 
+	// RequireHolderPoP makes POST /v1/credentials/issue refuse a session
+	// whose declared holder key hasn't signed HolderPoPMessage (see
+	// holderpop.go). Off (the default) still verifies a proof when one is
+	// sent; it only stops requiring one, for clients that predate it.
+	//
+	// Env: REQUIRE_HOLDER_POP.
+	RequireHolderPoP bool
+
 	// RateLimit bounds per-client request rates (see RateLimitConfig). The
 	// zero value disables it; LoadConfigFromEnv enables
 	// DefaultRateLimitConfig unless RATE_LIMIT=off.
@@ -137,6 +145,8 @@ type Config struct {
 //   - IDENTIFIER_HMAC_KEY          default empty (per-identifier nullifier
 //     seeds off). Base64 secret of at least 32 bytes; see
 //     Config.IdentifierHMACKey.
+//   - REQUIRE_HOLDER_POP           default off. When on, issuance needs a
+//     holder_proof_b64 from any session that declared a holder key.
 //   - RATE_LIMIT                   default on (DefaultRateLimitConfig);
 //     "off" disables per-client rate limiting (load tests only).
 //   - TRUSTED_PROXY_HOPS           default 0. Set 1 behind Cloud Run so the
@@ -150,6 +160,7 @@ func LoadConfigFromEnv() (Config, error) {
 		ExposeChallengeSecrets: envBool(os.Getenv("DEV_EXPOSE_CHALLENGE_SECRETS")),
 		EnrollmentInviteCode:   strings.TrimSpace(os.Getenv("ENROLLMENT_INVITE_CODE")),
 		AdminToken:             strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
+		RequireHolderPoP:       envBool(os.Getenv("REQUIRE_HOLDER_POP")),
 	}
 
 	if m := os.Getenv("SESSION_TTL_MINUTES"); m != "" {

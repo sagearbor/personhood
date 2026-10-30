@@ -26,6 +26,12 @@ export type StartEnrollmentResponse = {
   issuer_did: string;
   expires_at: string;
   available_methods: MethodSummary[];
+  /**
+   * Present when the session declared a holder key: the exact string to sign
+   * with that key (lib/holderkey.ts signHolderMessage) and send back as
+   * holder_proof_b64 at issuance, proving the browser holds the key.
+   */
+  holder_proof_message?: string;
 };
 
 export type ChallengeData = {
@@ -347,8 +353,14 @@ export async function completeMethod(
   });
 }
 
-export async function issueCredential(sessionID: string): Promise<{ credential: Credential }> {
-  return postJSON('/v1/credentials/issue', { session_id: sessionID });
+export async function issueCredential(
+  sessionID: string,
+  holderProofB64?: string,
+): Promise<{ credential: Credential }> {
+  return postJSON('/v1/credentials/issue', {
+    session_id: sessionID,
+    holder_proof_b64: holderProofB64 || undefined,
+  });
 }
 
 export async function listMethods(): Promise<{ methods: MethodSummary[] }> {

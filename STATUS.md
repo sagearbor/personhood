@@ -6,6 +6,12 @@
 
 ---
 
+## Round-11 (2026-10-29 overnight): enrollment hardening
+
+| Change | Path | What works |
+|---|---|---|
+| **Holder proof-of-possession** | `src/server/holderpop.go`, `handlers.go`, `config.go`, `app/web/lib/holderkey.ts`, `CredentialStep.tsx`, `scripts/e2e-openline.sh` | `/enrollment/start` returns `holder_proof_message` when a holder key is declared; the client signs it and sends `holder_proof_b64` at issue. A wrong proof is always 403 `holder_proof_invalid`; a missing one is 403 `holder_proof_required` only with `REQUIRE_HOLDER_POP=1` (default off, because the OpenLine wallet doesn't send it yet). `/v1/config` reports `holder_pop_required`. The web app and e2e-openline sign it. Closes the round-9 review finding. |
+
 ## Round-10 (2026-10-29): one inbox, one voter
 
 Owner decision: the launch includes real one-person-one-vote voting (UBI
