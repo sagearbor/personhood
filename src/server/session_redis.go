@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/sagearbor/personhood/pkg/redisclient"
@@ -15,6 +16,9 @@ import (
 // redisSessionKeyPrefix namespaces session keys on a (possibly shared)
 // Redis instance.
 const redisSessionKeyPrefix = "personhood:session:"
+
+// redisIssuedKeyPrefix keys the SET NX claim MarkIssued takes per session.
+const redisIssuedKeyPrefix = "personhood:session-issued:"
 
 // sessionRecord is the JSON-serializable form of a session's state — the
 // same fields as the in-memory session type, minus its mutex (a mutex has no
@@ -92,7 +96,7 @@ func (s *RedisSessionStore) SetIdentifierKey(sessionID, kind, key string) error 
 // restarts and are shared across horizontally scaled issuer replicas —
 // unlike InMemorySessionStore, which is scoped to one process.
 //
-// Concurrency note: RecordMethodResult and MarkIssued are read-modify-write
+// Concurrency note: RecordMethodResult is read-modify-write
 // (GET, mutate, SET) rather than atomic Redis transactions (no WATCH/MULTI
 // or Lua scripting is implemented — see the package doc on
 // pkg/redisclient's minimal command surface). Two calls racing on the exact
@@ -102,7 +106,8 @@ func (s *RedisSessionStore) SetIdentifierKey(sessionID, kind, key string) error 
 // practice one holder drives one session serially through its ceremonies,
 // so this is an acceptable v1 tradeoff, not a security hole — the worst
 // case is a dropped verified-method record that the client can simply
-// retry, not incorrect issuance.
+// retry, not incorrect issuance. MarkIssued additionally takes a SET NX
+// claim, so concurrent issue calls for one session mint exactly once.
 type RedisSessionStore struct {
 	client *redisclient.Client
 	ttl    time.Duration
@@ -245,6 +250,20 @@ func (s *RedisSessionStore) MarkIssued(sessionID, credentialID string) error {
 		return err
 	}
 	if rec.IssuedCredentialID != "" {
+		return ErrSessionAlreadyIssued
+	}
+	// SET NX makes the claim atomic: of two concurrent issue calls for one
+	// session, exactly one sets the key and the other is refused, so a
+	// session never hands out two credentials.
+	ttl := time.Until(rec.ExpiresAt)
+	if ttl <= 0 {
+		ttl = time.Minute
+	}
+	reply, err := s.client.Do(ctx, "SET", redisIssuedKeyPrefix+sessionID, credentialID, "NX", "PX", strconv.FormatInt(ttl.Milliseconds(), 10))
+	if err != nil {
+		return fmt.Errorf("server: redis issue claim: %w", err)
+	}
+	if reply.Type == redisclient.ReplyNil {
 		return ErrSessionAlreadyIssued
 	}
 	rec.IssuedCredentialID = credentialID
