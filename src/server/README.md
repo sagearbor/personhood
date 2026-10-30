@@ -119,6 +119,10 @@ show the user what mode they are in.
   `nullifierBinding` derives from it, so re-enrolling the same inbox on a new
   device key is a re-issue. Throwaway inboxes are still Sybil-able; only an
   anchor method stops one person holding many.
+- **Per-identifier send cap** (`sendlimit.go`): each email address or phone
+  number gets at most 5 verification messages an hour, whoever asks (429
+  `identifier_rate_limited`), keyed by a hash of the normalized identifier,
+  in memory. Follows `RATE_LIMIT=off`.
 - **Holder proof-of-possession** (`holderpop.go`): a declared holder key
   must sign `personhood-holder-pop:v1:<issuer DID>:<session id>` before the
   credential is bound to it, so nobody can get a credential bound to a key
