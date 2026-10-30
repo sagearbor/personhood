@@ -15,6 +15,12 @@
 | **Email begin abuse** | `src/server/sendlimit.go`, `handlers.go`, `ratelimit.go`, `src/methods/email/body.go` | Each email address or phone number gets at most 5 verification messages an hour, whoever asks (429 `identifier_rate_limited` with Retry-After); keyed by the identifier HMAC when `IDENTIFIER_HMAC_KEY` is set, else SHA-256 of the normalized identifier, in memory only. Off with `RATE_LIMIT=off`. The SMTP and SendGrid emails now say someone asked this issuer (host) to confirm the address at a given UTC time, and that ignoring it is safe; no IP. Closes the round-9 review finding. |
 | **Holder key can't leave the device; biometric lock** | `app/web/lib/holderkey.ts`, `storage.ts`, `webauthn.ts`, `CredentialStep.tsx` | The web app's holder key is now a non-extractable WebCrypto Ed25519 key stored as an opaque CryptoKey in IndexedDB: page script can sign with it but can't read or copy it. Keys saved earlier as base64 are re-imported non-extractable on first load (same public key, same DID). Once the visitor registers a device passkey at the save step, the key asks for that passkey's fingerprint / face / PIN check before it signs. That lock is local (the signature is plain Ed25519, which OpenLine verifies unchanged); a key cryptographically bound to the biometric needs a WebAuthn PRF-wrapped key or the OpenLine wallet's native keystore. Signatures and the wire format are unchanged. |
 
+Live since 2026-10-30: issuer `personhood-issuer-00013-czk` (same signing
+key; invite gate and test mode still ON; `holder_pop_required: false` until
+the OpenLine wallet sends `holder_proof_b64`) and the web app rebuilt from
+040aa02. The live e2e run (remote with revoke, OpenLine handshake with
+holder proof, phone check with axe) passed.
+
 ## Issuer kit (2026-10-30): anyone can run an independent issuer
 
 First step off a single Google Cloud issuer: a friend with a $5 VPS runs
