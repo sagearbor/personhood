@@ -1,32 +1,43 @@
-// Holder Ed25519 keypair — generation + persistence.
+// Holder Ed25519 keypair — generation, persistence, signing.
 //
-// v0.1: the web app generates a real Ed25519 keypair via WebCrypto on first
-// boot, sends the raw public key to POST /enrollment/start
-// (holder_public_key_b64), and the issuer binds it into a real did:key
-// holder DID plus a stub nullifierBinding on the issued credential (see
-// src/server/did.go DIDKeyFromEd25519 / NullifierBindingForHolder). The
-// private key is generated and persisted but not used for anything yet —
-// presentation-time proof-of-possession is a v0.2 concern per
-// docs/03-credential-format.md — but generating and binding a real key now
-// is what makes nullifierBinding (and therefore nullifier_required
-// policies) work end to end.
+// The web app generates an Ed25519 keypair via WebCrypto on first boot,
+// sends the raw public key to POST /enrollment/start
+// (holder_public_key_b64), and the issuer binds it into a did:key holder
+// DID and the credential's nullifierBinding (src/server/did.go). At
+// issuance the private key signs the session's holder_proof_message
+// (signHolderMessage), proving to the issuer that this browser holds the
+// key it declared.
 //
-// Persisted as raw base64 bytes in IndexedDB (lib/storage.ts) rather than as
-// a non-extractable CryptoKey via structured clone, so the wire format stays
-// simple and inspectable. v0.2 will wrap the private key behind a WebAuthn
-// PRF-derived secret (storage.ts's existing note); this module's export
-// shape is intentionally simple so that upgrade does not need to change
-// callers of getOrCreateHolderKeyPair().
+// The private key is generated NON-EXTRACTABLE and persisted as a CryptoKey
+// in IndexedDB (structured clone keeps it opaque): page script, including
+// anything injected into the page, can ask the browser to sign with it but
+// can never read its bytes, so it can't be copied to another device. Keys
+// saved by earlier versions as base64 pkcs8 are re-imported non-extractable
+// on first load and the base64 copy is overwritten (migrateLegacy).
+//
+// Biometric lock: once the visitor registers a device passkey (the "save"
+// step), signHolderMessage asks for that passkey's fingerprint / face / PIN
+// check before signing. That is a local gate, not a cryptographic one: the
+// signature itself is a plain Ed25519 signature, which is what verifiers
+// (OpenLine) check. Binding the key itself to the biometric needs a
+// WebAuthn PRF-wrapped key or a native keystore; see STATUS.md.
 //
 // Browsers without WebCrypto Ed25519 support (isEd25519Available() false)
 // fall back gracefully: getOrCreateHolderKeyPair() resolves to null, the
 // caller omits holder_public_key_b64, and the server issues the v0.1
-// placeholder did:personhood:holder:<sha256> DID with no nullifierBinding —
-// the same behavior as before this feature existed.
+// placeholder did:personhood:holder:<sha256> DID with no nullifierBinding.
 
-import { loadHolderKeyPair, saveHolderKeyPair } from './storage';
+import { loadDevicePasskeyId, loadHolderKeyPair, saveHolderKeyPair } from './storage';
+import { verifyDevicePasskey } from './webauthn';
 
 export type HolderKeyPair = {
+  publicKeyB64: string;
+  /** Non-extractable; usable only through crypto.subtle.sign. */
+  privateKey: CryptoKey;
+};
+
+/** The shape earlier versions stored: the private key as base64 pkcs8. */
+type LegacyHolderKeyPair = {
   publicKeyB64: string;
   privateKeyB64: string;
 };
@@ -42,22 +53,40 @@ export function isEd25519Available(): boolean {
 }
 
 /**
- * generateHolderKeyPair creates a fresh Ed25519 keypair and exports both
- * halves as base64: the public key in 'raw' form (32 bytes — what
- * src/server/did.go's DIDKeyFromEd25519 expects) and the private key in
- * 'pkcs8' form (for future presentation-signing use).
+ * generateHolderKeyPair creates a fresh Ed25519 keypair whose private key
+ * can't be exported. The public key (always exportable) comes back as raw
+ * base64, the 32 bytes src/server/did.go's DIDKeyFromEd25519 expects.
  */
 export async function generateHolderKeyPair(): Promise<HolderKeyPair> {
-  const pair = (await crypto.subtle.generateKey(ED25519_ALG, true, [
-    'sign',
-    'verify',
-  ])) as CryptoKeyPair;
+  const pair = (await crypto.subtle.generateKey(ED25519_ALG, false, ['sign', 'verify'])) as CryptoKeyPair;
   const rawPub = await crypto.subtle.exportKey('raw', pair.publicKey);
-  const pkcs8Priv = await crypto.subtle.exportKey('pkcs8', pair.privateKey);
-  return {
-    publicKeyB64: bufToB64(rawPub),
-    privateKeyB64: bufToB64(pkcs8Priv),
-  };
+  return { publicKeyB64: bufToB64(rawPub), privateKey: pair.privateKey };
+}
+
+/**
+ * migrateLegacy turns a stored base64 pkcs8 key into a non-extractable
+ * CryptoKey with the same public key, so the holder DID doesn't change.
+ */
+export async function migrateLegacy(legacy: LegacyHolderKeyPair): Promise<HolderKeyPair> {
+  const privateKey = await crypto.subtle.importKey('pkcs8', b64ToBuf(legacy.privateKeyB64), ED25519_ALG, false, [
+    'sign',
+  ]);
+  return { publicKeyB64: legacy.publicKeyB64, privateKey };
+}
+
+function isLegacy(v: unknown): v is LegacyHolderKeyPair {
+  return typeof v === 'object' && v !== null && typeof (v as LegacyHolderKeyPair).privateKeyB64 === 'string';
+}
+
+async function loadHolderKey(): Promise<HolderKeyPair | null> {
+  const stored = await loadHolderKeyPair();
+  if (!stored) return null;
+  if (isLegacy(stored)) {
+    const migrated = await migrateLegacy(stored);
+    await saveHolderKeyPair(migrated);
+    return migrated;
+  }
+  return stored as HolderKeyPair;
 }
 
 /**
@@ -70,7 +99,7 @@ export async function generateHolderKeyPair(): Promise<HolderKeyPair> {
 export async function getOrCreateHolderKeyPair(): Promise<HolderKeyPair | null> {
   if (!isEd25519Available()) return null;
   try {
-    const existing = await loadHolderKeyPair();
+    const existing = await loadHolderKey();
     if (existing) return existing;
     const pair = await generateHolderKeyPair();
     await saveHolderKeyPair(pair);
@@ -80,17 +109,33 @@ export async function getOrCreateHolderKeyPair(): Promise<HolderKeyPair | null> 
   }
 }
 
+/** Thrown when the visitor cancels or fails the passkey check before signing. */
+export class HolderKeyLockedError extends Error {
+  constructor() {
+    super('Unlock with your fingerprint, face or device PIN to continue.');
+    this.name = 'HolderKeyLockedError';
+  }
+}
+
 /**
- * signHolderMessage signs message (UTF-8) with the persisted holder private
- * key and returns the base64 Ed25519 signature, or null when there is no
- * holder key (the caller then issues without a proof, as before).
+ * signHolderMessage signs message (UTF-8) with the persisted holder key and
+ * returns the base64 Ed25519 signature, or null when there is no holder key
+ * (the caller then issues without a proof, as before). When a device passkey
+ * is registered, the passkey check runs first; failing it throws
+ * HolderKeyLockedError.
  */
 export async function signHolderMessage(message: string): Promise<string | null> {
   if (!isEd25519Available()) return null;
-  const pair = await loadHolderKeyPair();
+  const pair = await loadHolderKey();
   if (!pair) return null;
-  const priv = await crypto.subtle.importKey('pkcs8', b64ToBuf(pair.privateKeyB64), ED25519_ALG, false, ['sign']);
-  const sig = await crypto.subtle.sign(ED25519_ALG, priv, new TextEncoder().encode(message));
+  const passkeyId = await loadDevicePasskeyId().catch(() => null);
+  if (passkeyId && !(await verifyDevicePasskey(passkeyId))) throw new HolderKeyLockedError();
+  return signWith(pair.privateKey, message);
+}
+
+/** signWith signs message (UTF-8) with key and returns base64. Exported for tests. */
+export async function signWith(key: CryptoKey, message: string): Promise<string> {
+  const sig = await crypto.subtle.sign(ED25519_ALG, key, new TextEncoder().encode(message));
   return bufToB64(sig);
 }
 

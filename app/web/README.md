@@ -62,8 +62,9 @@ app/web/
 │       └── CredentialStep.tsx — issue + view + save to IndexedDB
 ├── lib/
 │   ├── api.ts            — Personhood server client (fetch-based)
-│   ├── storage.ts        — IndexedDB wrapper (credentials + session checkpoint)
-│   └── webauthn.ts       — registerDevicePasskey + verifyDevicePasskey
+│   ├── storage.ts        — IndexedDB wrapper (credentials, session checkpoint, holder key, passkey id)
+│   ├── holderkey.ts      — non-extractable Ed25519 holder key; signs the issuer's holder proof
+│   └── webauthn.ts       — registerDevicePasskey + verifyDevicePasskey (biometric lock on the holder key)
 └── public/
     └── sw.js             — service worker (offline shell + installability)
 ```
