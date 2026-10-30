@@ -16,6 +16,10 @@ import (
 // stored under.
 const firestoreSessionCollection = "personhood-sessions"
 
+// firestoreIssuedCollection holds one create-only claim document per session
+// that has issued (see MarkIssued).
+const firestoreIssuedCollection = "personhood-session-issued"
+
 // FirestoreSessionStore is a Firestore-backed SessionStore, selected via
 // FIRESTORE_PROJECT_ID (see NewSessionStoreFromEnv) so enrollment sessions
 // survive process restarts and are shared across horizontally scaled issuer
@@ -27,7 +31,8 @@ const firestoreSessionCollection = "personhood-sessions"
 // each session is one JSON blob (sessionRecord, shared with the Redis
 // backend) under one document, and mutations are read-modify-write rather
 // than an atomic transaction — see RedisSessionStore's doc comment for the
-// full reasoning, which applies unchanged here.
+// full reasoning, which applies unchanged here. The exception is MarkIssued,
+// which claims a create-only document so a session issues exactly once.
 type FirestoreSessionStore struct {
 	client *firestoreclient.Client
 	ttl    time.Duration
@@ -164,6 +169,22 @@ func (s *FirestoreSessionStore) MarkIssued(sessionID, credentialID string) error
 		return err
 	}
 	if rec.IssuedCredentialID != "" {
+		return ErrSessionAlreadyIssued
+	}
+	// The read-modify-write above can't stop two concurrent issue calls for
+	// one session from both seeing "not issued" (two credentials for one
+	// enrollment). A create-only claim document can: exactly one caller
+	// creates it, and the other gets ErrSessionAlreadyIssued, so its signed
+	// credential is never handed out.
+	claim, err := json.Marshal(map[string]string{"credential_id": credentialID})
+	if err != nil {
+		return fmt.Errorf("server: marshal issue claim: %w", err)
+	}
+	created, err := s.client.Create(ctx, firestoreIssuedCollection, sessionID, claim)
+	if err != nil {
+		return fmt.Errorf("server: firestore issue claim: %w", err)
+	}
+	if !created {
 		return ErrSessionAlreadyIssued
 	}
 	rec.IssuedCredentialID = credentialID
