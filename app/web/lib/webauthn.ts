@@ -1,20 +1,16 @@
-// WebAuthn helpers — v0.1 placeholder.
+// WebAuthn helpers.
 //
-// The full design wraps the holder's private key under a WebAuthn-derived
-// secret (the `prf` extension) so the credential is device-bound and
-// biometric-gated. v0.1 ships the plumbing but does not yet generate or
-// hold a holder private key (the issuer-controlled DID in src/server/did.go
-// stands in until the web app generates a WebCrypto Ed25519 keypair).
+//   1. registerDevicePasskey() — registers a discoverable platform passkey
+//      (fingerprint / face / device PIN) at the credential save step. Its id
+//      is stored (lib/storage.ts saveDevicePasskeyId).
+//   2. verifyDevicePasskey() — re-prompts for that biometric / PIN check.
+//      lib/holderkey.ts runs it before the holder key signs anything, so a
+//      registered passkey locks the key. The lock is local: the holder key
+//      itself is a separate non-extractable Ed25519 key, and a PRF-wrapped
+//      key (the passkey deriving the key's protection) is future work.
 //
-// What this module currently does:
-//   1. registerDevicePasskey() — registers a discoverable WebAuthn credential
-//      on the device, scoped to "personhood-credential-vault". The actual
-//      raw key material never leaves the device.
-//   2. verifyDevicePasskey() — re-prompts for biometric / PIN to gate
-//      reading the saved credential from IndexedDB.
-//
-// Both functions are no-ops on browsers without WebAuthn support and return
-// false; UI should treat that as "save without biometric gate".
+// Both are no-ops on browsers without WebAuthn: register returns null and
+// verify returns true, so the UI saves without a biometric lock.
 
 export function isWebAuthnAvailable(): boolean {
   return (

@@ -6,7 +6,7 @@ import { Card } from '../Card';
 import type { Status } from '../StatusPill';
 import { friendlyError, isSessionExpired } from '@/lib/errors';
 import { issueCredential, type StartEnrollmentResponse, type Credential } from '@/lib/api';
-import { saveCredential, clearSession } from '@/lib/storage';
+import { saveCredential, clearSession, saveDevicePasskeyId } from '@/lib/storage';
 import { signHolderMessage } from '@/lib/holderkey';
 import { registerDevicePasskey, isWebAuthnAvailable } from '@/lib/webauthn';
 import {
@@ -112,9 +112,12 @@ export function CredentialStep({
     setErr(null);
     try {
       if (isWebAuthnAvailable()) {
-        // Optional biometric registration to demo the wallet UX. Failure to
-        // register (e.g. user cancels) is non-fatal — the credential still saves.
-        await registerDevicePasskey().catch(() => null);
+        // Optional biometric lock. Once registered, the holder key asks for
+        // this passkey's fingerprint / face / PIN check before it signs
+        // (lib/holderkey.ts). Failure to register (e.g. the user cancels) is
+        // non-fatal — the credential still saves, unlocked.
+        const passkeyId = await registerDevicePasskey().catch(() => null);
+        if (passkeyId) await saveDevicePasskeyId(passkeyId).catch(() => {});
       }
       await saveCredential(credential);
       setSaved(true);

@@ -30,6 +30,7 @@ Guide: [docs/RUN_AN_ISSUER.md](docs/RUN_AN_ISSUER.md).
 Limit: the kit is email-only (`round1-email`), which OpenLine's value chain
 does not accept for voting; it is for testnets and advisory polls until an
 anchor method ships.
+| **Holder key can't leave the device; biometric lock** | `app/web/lib/holderkey.ts`, `storage.ts`, `webauthn.ts`, `CredentialStep.tsx` | The web app's holder key is now a non-extractable WebCrypto Ed25519 key stored as an opaque CryptoKey in IndexedDB: page script can sign with it but can't read or copy it. Keys saved earlier as base64 are re-imported non-extractable on first load (same public key, same DID). Once the visitor registers a device passkey at the save step, the key asks for that passkey's fingerprint / face / PIN check before it signs. That lock is local (the signature is plain Ed25519, which OpenLine verifies unchanged); a key cryptographically bound to the biometric needs a WebAuthn PRF-wrapped key or the OpenLine wallet's native keystore. Signatures and the wire format are unchanged. |
 
 ## Round-10 (2026-10-29): one inbox, one voter
 
