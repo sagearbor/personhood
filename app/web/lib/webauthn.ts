@@ -29,7 +29,7 @@ const RP_NAME = 'Personhood';
 const USER_NAME = 'personhood-credential-vault';
 const USER_ID = new TextEncoder().encode('personhood-vault-v1').slice(0, 32);
 
-function randomChallenge(): Uint8Array {
+function randomChallenge(): Uint8Array<ArrayBuffer> {
   const c = new Uint8Array(32);
   crypto.getRandomValues(c);
   return c;
