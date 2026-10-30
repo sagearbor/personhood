@@ -58,6 +58,10 @@ type Server struct {
 	identifierKeys *identifierKeyer
 	identifiers    IdentifierStore
 
+	// identifierSends caps messages per email/phone (sendlimit.go); nil
+	// when RateLimit.IdentifierSendsPerHour is 0.
+	identifierSends *identifierSendLimiter
+
 	// methodRoutes carries additional HTTP handlers a method plugin needs
 	// the server to host (e.g. third-party webhook receivers). Populated by
 	// the registry-builder helpers; mounted under /v1/methods/{id}/<path>
@@ -158,6 +162,10 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		return nil, fmt.Errorf("server: revocation store: %w", err)
 	}
 
+	var sends *identifierSendLimiter
+	if n := cfg.RateLimit.IdentifierSendsPerHour; n > 0 {
+		sends = newIdentifierSendLimiter(n)
+	}
 	var keyer *identifierKeyer
 	var identifiers IdentifierStore
 	if len(cfg.IdentifierHMACKey) > 0 {
@@ -190,6 +198,7 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		revocations:        revocations,
 		identifierKeys:     keyer,
 		identifiers:        identifiers,
+		identifierSends:    sends,
 		methodRoutes:       deps.MethodRoutes,
 		nowFunc:            func() time.Time { return time.Now().UTC() },
 		credentialLifetime: 365 * 24 * time.Hour,

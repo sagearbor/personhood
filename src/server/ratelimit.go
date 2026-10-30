@@ -42,6 +42,12 @@ type RateLimitConfig struct {
 	// keys on the rightmost entry, which the client cannot forge.
 	// Env: TRUSTED_PROXY_HOPS.
 	TrustedProxyHops int
+
+	// IdentifierSendsPerHour caps verification messages to one email
+	// address or phone number per hour, across all clients (see
+	// identifierSendLimiter). 0 disables it. Applies even when Enabled is
+	// false, so tests can turn it on alone.
+	IdentifierSendsPerHour int
 }
 
 // DefaultRateLimitConfig is generous for a human on a phone and tight for a
@@ -56,6 +62,8 @@ func DefaultRateLimitConfig() RateLimitConfig {
 		BeginBurst:       4,
 		DefaultPerMinute: 120,
 		DefaultBurst:     60,
+
+		IdentifierSendsPerHour: 5,
 	}
 }
 
