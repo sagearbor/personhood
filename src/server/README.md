@@ -119,6 +119,12 @@ show the user what mode they are in.
   `nullifierBinding` derives from it, so re-enrolling the same inbox on a new
   device key is a re-issue. Throwaway inboxes are still Sybil-able; only an
   anchor method stops one person holding many.
+- **Post-quantum companion signature (experimental, off by default)**: with
+  `ISSUER_MLDSA_SK` (base64 32-byte seed) set, every credential also carries
+  an ML-DSA-65 signature in `proof.pqProof`, the DID document publishes the
+  key as `#key-pq-1` after the Ed25519 key, and `/v1/config` reports
+  `pq_proof: true`. Verifiers that ignore `pqProof` are unaffected. See
+  `docs/POST_QUANTUM.md`.
 
 ## Tests
 

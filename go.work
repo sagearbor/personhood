@@ -6,6 +6,7 @@ use (
 	./pkg/types
 	./sdk/go
 	./src/credential
+	./src/credential/pq
 	./src/methods/app-attest-device
 	./src/methods/captcha-turnstile
 	./src/methods/email

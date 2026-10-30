@@ -73,6 +73,10 @@ type Issuer struct {
 	// credential URL embedded in CredentialStatus.StatusListCredential when
 	// Issue is called with a non-nil statusListIndex.
 	StatusListCredentialURL string
+
+	// PQ, if set, makes Issue add a post-quantum companion signature in
+	// Proof.PQProof (see PQSigner and the src/credential/pq module).
+	PQ PQSigner
 }
 
 // NewIssuer constructs an Issuer. keyFragment is appended to did with "#" to
@@ -101,7 +105,7 @@ func NewIssuer(did types.DID, keyFragment string, priv ed25519.PrivateKey, statu
 //   - CredentialStatus populated iff statusListIndex is non-nil AND the
 //     issuer has a non-empty StatusListCredentialURL
 //   - Proof attached with an Ed25519 signature over the canonicalized
-//     credential
+//     credential, plus Proof.PQProof when PQ is set
 //
 // Issue runs cred.Validate() before signing; a structurally-invalid credential
 // is rejected with the underlying validation error.
@@ -180,6 +184,13 @@ func (i *Issuer) Issue(
 		VerificationMethod: i.VerificationMethod,
 		// v0.1: base64url (no padding). v0.2 will migrate to multibase-base58-btc ("z..." prefix).
 		ProofValue: base64.RawURLEncoding.EncodeToString(sig),
+	}
+	if i.PQ != nil {
+		pq, err := i.PQ.SignPQ(signingInput)
+		if err != nil {
+			return types.PersonhoodCredential{}, fmt.Errorf("issuer: pq sign: %w", err)
+		}
+		cred.Proof.PQProof = pq
 	}
 	return cred, nil
 }

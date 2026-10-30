@@ -29,6 +29,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sagearbor/personhood/src/credential/pq"
 )
 
 // Config holds all runtime tunables the server needs to start.
@@ -107,6 +109,15 @@ type Config struct {
 	// Env: IDENTIFIER_HMAC_KEY (base64, at least 32 bytes decoded).
 	IdentifierHMACKey []byte
 
+	// IssuerPQSeed, when set, makes every credential also carry an ML-DSA-65
+	// (FIPS 204) signature in proof.pqProof, and the DID document publish the
+	// matching key as #key-pq-1. Experimental; see docs/POST_QUANTUM.md.
+	// Empty leaves credentials Ed25519-only. Deployed from Secret Manager;
+	// never logged.
+	//
+	// Env: ISSUER_MLDSA_SK (base64 32-byte seed; `openssl rand -base64 32`).
+	IssuerPQSeed []byte
+
 	// RateLimit bounds per-client request rates (see RateLimitConfig). The
 	// zero value disables it; LoadConfigFromEnv enables
 	// DefaultRateLimitConfig unless RATE_LIMIT=off.
@@ -137,6 +148,8 @@ type Config struct {
 //   - IDENTIFIER_HMAC_KEY          default empty (per-identifier nullifier
 //     seeds off). Base64 secret of at least 32 bytes; see
 //     Config.IdentifierHMACKey.
+//   - ISSUER_MLDSA_SK              default empty (Ed25519-only credentials).
+//     Base64 32-byte seed; see Config.IssuerPQSeed.
 //   - RATE_LIMIT                   default on (DefaultRateLimitConfig);
 //     "off" disables per-client rate limiting (load tests only).
 //   - TRUSTED_PROXY_HOPS           default 0. Set 1 behind Cloud Run so the
@@ -180,6 +193,17 @@ func LoadConfigFromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("%s: want at least %d bytes, got %d (generate with `openssl rand -base64 32`)", IdentifierKeyEnv, minIdentifierKeyBytes, len(raw))
 		}
 		cfg.IdentifierHMACKey = raw
+	}
+
+	if k := strings.TrimSpace(os.Getenv("ISSUER_MLDSA_SK")); k != "" {
+		raw, err := decodeB64Tolerant(k)
+		if err != nil {
+			return Config{}, fmt.Errorf("ISSUER_MLDSA_SK: %w", err)
+		}
+		if len(raw) != pq.SeedSize {
+			return Config{}, fmt.Errorf("ISSUER_MLDSA_SK: want a %d-byte seed, got %d bytes", pq.SeedSize, len(raw))
+		}
+		cfg.IssuerPQSeed = raw
 	}
 
 	skB64 := os.Getenv("ISSUER_ED25519_SK_B64")
