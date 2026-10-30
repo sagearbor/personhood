@@ -6,6 +6,12 @@
 
 ---
 
+## Post-quantum companion signature (experimental, off)
+
+| Change | Path | What works |
+|---|---|---|
+| **ML-DSA-65 + Ed25519 hybrid credentials** | `src/credential/pq` (own module, cloudflare/circl v1.6.3), `src/credential/pqhooks.go`, `pkg/types.PQProof`, `src/server` (`ISSUER_MLDSA_SK`) | With `ISSUER_MLDSA_SK` set, credentials also carry an ML-DSA-65 (FIPS 204) signature in `proof.pqProof` over the same signing input; the DID document lists the key after Ed25519; `/v1/config` reports `pq_proof`. Verifiers that ignore `pqProof` are unaffected; `Verifier.RequirePQ` rejects Ed25519-only credentials. Not deployed (no secret yet). Credential grows ~0.8 KB → ~5.4 KB. Plan and limits: `docs/POST_QUANTUM.md`. |
+
 ## Round-10 (2026-10-29): one inbox, one voter
 
 Owner decision: the launch includes real one-person-one-vote voting (UBI

@@ -233,6 +233,23 @@ else
   echo "==> identifier key: no secret $IDENTIFIER_SECRET_NAME — WARNING: one inbox can enroll unlimited independent credentials" >&2
 fi
 
+# ML-DSA-65 (post-quantum) issuer key: experimental, off unless the secret
+# exists (docs/POST_QUANTUM.md). Credentials then carry proof.pqProof next to
+# the Ed25519 proof, and the DID document publishes #key-pq-1. Create with
+#   openssl rand -base64 32 | tr -d '\n' | gcloud secrets create personhood-issuer-mldsa-key --data-file=- --project $PROJECT
+# Credentials grow from ~1 KB to ~5.5 KB.
+PQ_SECRET_NAME="${PQ_SECRET_NAME:-personhood-issuer-mldsa-key}"
+if gcloud secrets describe "$PQ_SECRET_NAME" --project "$PROJECT" >/dev/null 2>&1; then
+  gcloud secrets add-iam-policy-binding "$PQ_SECRET_NAME" \
+    --project "$PROJECT" \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="roles/secretmanager.secretAccessor" >/dev/null
+  SECRETS="${SECRETS},ISSUER_MLDSA_SK=${PQ_SECRET_NAME}:latest"
+  echo "==> pq key: attaching secret $PQ_SECRET_NAME (credentials also signed with ML-DSA-65)"
+else
+  echo "==> pq key: no secret $PQ_SECRET_NAME, credentials stay Ed25519-only"
+fi
+
 echo "==> deploying $SERVICE to $REGION (source build)"
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT" \

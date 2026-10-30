@@ -3,11 +3,13 @@ module github.com/sagearbor/personhood/src/server
 go 1.22.0
 
 require (
+	github.com/cloudflare/circl v1.6.3
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/sagearbor/personhood/pkg/firestoreclient v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/pkg/redisclient v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/pkg/types v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/credential v0.0.0-00010101000000-000000000000
+	github.com/sagearbor/personhood/src/credential/pq v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/app-attest-device v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/captcha-turnstile v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/email v0.0.0-00010101000000-000000000000
@@ -26,6 +28,7 @@ require (
 
 require (
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
+	golang.org/x/sys v0.28.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -34,6 +37,7 @@ replace (
 	github.com/sagearbor/personhood/pkg/redisclient => ../../pkg/redisclient
 	github.com/sagearbor/personhood/pkg/types => ../../pkg/types
 	github.com/sagearbor/personhood/src/credential => ../credential
+	github.com/sagearbor/personhood/src/credential/pq => ../credential/pq
 	github.com/sagearbor/personhood/src/methods/app-attest-device => ../methods/app-attest-device
 	github.com/sagearbor/personhood/src/methods/captcha-turnstile => ../methods/captcha-turnstile
 	github.com/sagearbor/personhood/src/methods/email => ../methods/email

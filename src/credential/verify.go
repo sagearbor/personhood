@@ -37,6 +37,17 @@ type Verifier struct {
 	// HTTPClient is unused by the core verifier but is exposed so callers
 	// that pass a WebResolver share a client (timeouts, transport, etc).
 	HTTPClient *http.Client
+
+	// PQ, if set, makes Verify also check Proof.PQProof whenever a
+	// credential carries one (see the src/credential/pq module). Without it
+	// a PQ proof is ignored.
+	PQ PQVerifier
+
+	// RequirePQ refuses credentials without a valid PQ proof. It needs PQ.
+	// This is the setting that holds up against an attacker who can forge
+	// Ed25519: such an attacker can strip the PQ proof and re-sign, so
+	// accepting Ed25519-only credentials gives no PQ security.
+	RequirePQ bool
 }
 
 // NewVerifier constructs a Verifier using the supplied DID resolver. Pass a
@@ -51,6 +62,8 @@ func NewVerifier(resolver DIDResolver) *Verifier {
 
 // Verify returns nil iff cred is structurally valid AND its Ed25519 signature
 // verifies under the public key returned by the resolver for cred.Issuer.
+// With PQ set it also checks Proof.PQProof when present; with
+// RequirePQ the PQ proof must be present and valid.
 //
 // On failure the returned error wraps one of the sentinel errors below so
 // callers can distinguish categories with errors.Is.
@@ -95,7 +108,20 @@ func (v *Verifier) Verify(ctx context.Context, cred types.PersonhoodCredential) 
 	if !ed25519.Verify(pub, signingInput, sig) {
 		return ErrSignatureInvalid
 	}
-	return nil
+
+	if v.RequirePQ && v.PQ == nil {
+		return errors.New("verifier: RequirePQ needs a PQ verifier")
+	}
+	if cred.Proof.PQProof == nil {
+		if v.RequirePQ {
+			return ErrPQProofMissing
+		}
+		return nil
+	}
+	if v.PQ == nil {
+		return nil
+	}
+	return v.PQ.VerifyPQ(ctx, cred.Issuer, cred.Proof.PQProof, signingInput)
 }
 
 // Sentinel errors returned (wrapped) by Verifier.Verify.

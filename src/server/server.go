@@ -14,6 +14,7 @@ import (
 
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
+	"github.com/sagearbor/personhood/src/credential/pq"
 	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
 	captchamethod "github.com/sagearbor/personhood/src/methods/captcha-turnstile"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
@@ -45,7 +46,10 @@ type Server struct {
 	issuerDID       types.DID
 	issuerVMethodID string
 	issuerPublicKey ed25519.PublicKey
-	statusListURL   string
+	// issuerPQPublicKey is the packed ML-DSA-65 public key, or nil when
+	// credentials are Ed25519-only (Config.IssuerPQSeed empty).
+	issuerPQPublicKey []byte
+	statusListURL     string
 
 	registry    *registry.Registry
 	issuer      *credential.Issuer
@@ -147,6 +151,15 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 	}
 
 	issuer := credential.NewIssuer(issuerDID, "key-1", cfg.IssuerPrivateKey, statusListURL)
+	var pqPub []byte
+	if len(cfg.IssuerPQSeed) > 0 {
+		pub, priv, err := pq.KeyFromSeed(cfg.IssuerPQSeed)
+		if err != nil {
+			return nil, fmt.Errorf("server: ISSUER_MLDSA_SK: %w", err)
+		}
+		issuer.PQ = pq.Signer{Key: priv, VerificationMethod: IssuerVerificationMethod(issuerDID, PQKeyFragment)}
+		pqPub = pub.Bytes()
+	}
 
 	sessions, err := NewSessionStoreFromEnv(cfg.SessionTTL)
 	if err != nil {
@@ -183,6 +196,7 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		issuerDID:          issuerDID,
 		issuerVMethodID:    vMethod,
 		issuerPublicKey:    pub,
+		issuerPQPublicKey:  pqPub,
 		statusListURL:      statusListURL,
 		registry:           deps.Registry,
 		issuer:             issuer,
