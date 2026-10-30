@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/sagearbor/personhood/pkg/firestoreclient"
+	"github.com/sagearbor/personhood/pkg/redisclient"
 	"github.com/sagearbor/personhood/pkg/types"
 )
 
@@ -205,10 +206,11 @@ type IdentifierStore interface {
 }
 
 // NewIdentifierStoreFromEnv returns a Firestore-backed store when
-// FIRESTORE_PROJECT_ID is set, else an in-memory one. Like revocations, there
-// is no Redis backend: seeds kept only in memory are lost on restart, after
-// which every inbox could enroll once more as a "new" person, so a real
-// deployment must use Firestore.
+// FIRESTORE_PROJECT_ID is set, a Redis-backed one when REDIS_URL is set
+// (the Redis server must persist to disk, as the issuer kit's does), else an
+// in-memory one. Seeds kept only in memory are lost on restart, after which
+// every inbox could enroll once more as a "new" person, so a real
+// deployment must use Firestore or persistent Redis.
 func NewIdentifierStoreFromEnv() (IdentifierStore, error) {
 	if projectID := os.Getenv("FIRESTORE_PROJECT_ID"); projectID != "" {
 		client, err := firestoreclient.New(projectID)
@@ -216,6 +218,13 @@ func NewIdentifierStoreFromEnv() (IdentifierStore, error) {
 			return nil, fmt.Errorf("server: FIRESTORE_PROJECT_ID: %w", err)
 		}
 		return NewFirestoreIdentifierStore(client), nil
+	}
+	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+		client, err := redisclient.ParseURL(redisURL)
+		if err != nil {
+			return nil, fmt.Errorf("server: REDIS_URL: %w", err)
+		}
+		return NewRedisIdentifierStore(client), nil
 	}
 	return NewInMemoryIdentifierStore(), nil
 }

@@ -13,6 +13,23 @@
 | **Holder proof-of-possession** | `src/server/holderpop.go`, `handlers.go`, `config.go`, `app/web/lib/holderkey.ts`, `CredentialStep.tsx`, `scripts/e2e-openline.sh` | `/enrollment/start` returns `holder_proof_message` when a holder key is declared; the client signs it and sends `holder_proof_b64` at issue. A wrong proof is always 403 `holder_proof_invalid`; a missing one is 403 `holder_proof_required` only with `REQUIRE_HOLDER_POP=1` (default off, because the OpenLine wallet doesn't send it yet). `/v1/config` reports `holder_pop_required`. The web app and e2e-openline sign it. Closes the round-9 review finding. |
 | **A session issues exactly once** | `src/server/session_firestore.go`, `session_redis.go`, `issue_once_test.go` | `MarkIssued` now claims a create-only document (Firestore `personhood-session-issued/{session}`) or a `SET NX` key (Redis) before stamping the session, so concurrent `/v1/credentials/issue` calls for one session hand out one credential; the losers get 409 and their signed credential is discarded. In-memory was already atomic. Tested with 8 concurrent calls per store (emulator + real Redis) and through the handler. Closes the round-9 review finding. |
 
+## Issuer kit (2026-10-30): anyone can run an independent issuer
+
+First step off a single Google Cloud issuer: a friend with a $5 VPS runs
+`scripts/issuer-kit/up.sh --sslip` (or `--domain`) and gets their own issuer
+with HTTPS, then hands integrators the DID + public key it prints.
+Guide: [docs/RUN_AN_ISSUER.md](docs/RUN_AN_ISSUER.md).
+
+| Change | Path | What works |
+|---|---|---|
+| **Issuer kit** | `scripts/issuer-kit/` (`docker-compose.yml`, `Caddyfile`, `up.sh`, `backup.sh`, `issuer.env.example`) | Issuer + Redis (append-only file on a volume) + Caddy (automatic Let's Encrypt; `--local` skips it). The first `up.sh` writes `issuer.env` (0600, gitignored, also kept out of the Docker build context) with a fresh signing key, `IDENTIFIER_HMAC_KEY` and `ADMIN_TOKEN`; it never prints a secret, and prints the DID + `x` to pin. `--test-mode` is rehearsal only. `backup.sh` bundles `issuer.env` + a Redis snapshot into a 0600 tarball. |
+| **Redis revocation + identifier stores** | `src/server/revocation_redis.go`, `identifier_redis.go` | With `REDIS_URL` set (and no `FIRESTORE_PROJECT_ID`), status-list slots (`SET NX`), revocations and the one-inbox-one-voter seeds (`SET NX`) live in Redis instead of process memory, so a restart no longer forgets revocations, reuses slots, or lets every inbox enroll again. Firestore still wins when both are set. CI now runs the Redis integration tests against a Redis service. |
+| **Native-arch image** | `Dockerfile` | `GOARCH` follows BuildKit's `TARGETARCH` (arm64 VPSes work); Cloud Build's legacy builder still gets amd64. |
+
+Limit: the kit is email-only (`round1-email`), which OpenLine's value chain
+does not accept for voting; it is for testnets and advisory polls until an
+anchor method ships.
+
 ## Round-10 (2026-10-29): one inbox, one voter
 
 Owner decision: the launch includes real one-person-one-vote voting (UBI
