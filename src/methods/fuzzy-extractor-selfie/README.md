@@ -28,6 +28,13 @@ for and no vendor credential to configure.
   [docs/selfie-anchor.md](../../../docs/selfie-anchor.md). Short version:
   useful against casual double enrollment in a small cohort, not a
   Sybil-resistant anchor, because a browser cannot prove its camera is real.
+- `SELFIE_NATIVE=1` on top of `SELFIE_ANCHOR=1` (needs
+  `ANDROID_KEY_ATTESTATION_PACKAGE`): also registers
+  `fuzzy-extractor-selfie-native` (`native.go`, `motion.go`), strength 55,
+  for the OpenLine Android wallet: the same template and accumulator, plus
+  Android Key Attestation over a signed ceremony summary and
+  camera/gyroscope/screen-flash consistency checks. Native-only failures
+  fall back to this web method. See the doc's "Native ceremony" section.
 - `FUZZY_EXTRACTOR_ENABLED=1` (the original dev mode, described below):
   template only, no liveness, in-memory accumulator, strength 70.
 

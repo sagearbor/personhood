@@ -103,6 +103,11 @@ type NativeConfig struct {
 	// Logf, when set, receives one line per ceremony with the motion
 	// scores (no biometric data). Default log.Printf.
 	Logf func(format string, args ...any)
+	// LogTraces also logs each raw sensor trace (face position, size and
+	// mean colour per frame, IMU samples) in the shape
+	// TestNativeTraces_Recorded replays, for calibrating thresholds on a
+	// test issuer. Mean skin colour is personal data: test issuers only.
+	LogTraces bool
 }
 
 // NativeMethod implements the native selfie ceremony.
@@ -112,6 +117,7 @@ type NativeMethod struct {
 	strength int
 	th       NativeThresholds
 	logf     func(string, ...any)
+	traces   bool
 }
 
 var _ methodPlugin = (*NativeMethod)(nil)
@@ -125,7 +131,7 @@ func NewNativeMethod(cfg NativeConfig) *NativeMethod {
 	if cfg.Attester == nil {
 		panic("fuzzy-extractor-selfie.NewNativeMethod: Attester must not be nil")
 	}
-	n := &NativeMethod{web: cfg.Web, attester: cfg.Attester, strength: cfg.Strength, th: cfg.Thresholds, logf: cfg.Logf}
+	n := &NativeMethod{web: cfg.Web, attester: cfg.Attester, strength: cfg.Strength, th: cfg.Thresholds, logf: cfg.Logf, traces: cfg.LogTraces}
 	if n.strength == 0 {
 		n.strength = NativeMethodStrength
 	}
@@ -298,7 +304,13 @@ func (n *NativeMethod) CompleteCeremony(ctx context.Context, cc types.CeremonyCo
 	}
 
 	// 4. Camera, gyroscope and screen light agree.
-	rep := AnalyzeNativeTrace(sum.Trace, lc.flashColours(sum.ChallengeToken, DefaultFlashColours), n.th)
+	colours := lc.flashColours(sum.ChallengeToken, DefaultFlashColours)
+	rep := AnalyzeNativeTrace(sum.Trace, colours, n.th)
+	if n.traces {
+		if b, err := json.Marshal(map[string]any{"expect": "pass", "colours": colours, "trace": sum.Trace}); err == nil {
+			n.logf("fuzzy-extractor-selfie-native: trace %s", b)
+		}
+	}
 	if b, err := json.Marshal(rep); err == nil {
 		n.logf("fuzzy-extractor-selfie-native: motion %s device=%q sdk=%d", b, sum.Trace.Device.Model, sum.Trace.Device.SDK)
 	}

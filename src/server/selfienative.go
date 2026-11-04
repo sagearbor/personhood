@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
@@ -26,6 +27,8 @@ func selfieNativeFromEnv(web *fuzzyextractorselfie.Method) (*fuzzyextractorselfi
 	return fuzzyextractorselfie.NewNativeMethod(fuzzyextractorselfie.NativeConfig{
 		Web:      web,
 		Attester: androidKeyAttester{v: akv},
+		// Test issuers only: raw traces for threshold calibration.
+		LogTraces: os.Getenv("SELFIE_NATIVE_LOG_TRACES") == "1",
 	}), nil
 }
 
