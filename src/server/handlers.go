@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
+	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
 	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
 	ipasnmethod "github.com/sagearbor/personhood/src/methods/ip-asn-reputation"
 )
@@ -361,6 +363,11 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "complete_failed", err.Error())
 		return
+	}
+	// Device attestation outcome (a fixed reason code, never the chain), so
+	// an operator can see why a test phone passed or failed.
+	if methodID == appattestmethod.MethodID {
+		log.Printf("app-attest-device: success=%t reason=%q", result.Success, result.ErrorReason)
 	}
 	if result.Success {
 		if recErr := s.recordVerified(sess.ID, methodID, result, method.Metadata()); recErr != nil {
