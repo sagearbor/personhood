@@ -8,6 +8,7 @@ use (
 	./src/credential
 	./src/methods/app-attest-device
 	./src/methods/captcha-turnstile
+	./src/methods/document-chip
 	./src/methods/email
 	./src/methods/email-tier
 	./src/methods/fuzzy-extractor-selfie

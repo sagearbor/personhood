@@ -17,12 +17,19 @@ import { CANONICAL_5, CHIP_SIZE, fitSimilarity, fivePointsFromMediapipe } from '
 
 const MODEL_BASE = '/face-models';
 
+/** A camera frame, or a still image drawn on a canvas (e.g. a document photo). */
+export type FaceSource = HTMLVideoElement | HTMLCanvasElement;
+
 export type FaceEngine = {
-  /** Landmarks + blendshapes for one video frame (timestamps must increase). */
-  detect(video: HTMLVideoElement, t: number): FaceLandmarkerResult;
+  /** Landmarks + blendshapes for one frame (timestamps must increase). */
+  detect(video: FaceSource, t: number): FaceLandmarkerResult;
   /** 128-number descriptor of the first face in result, from the same frame. */
-  describe(video: HTMLVideoElement, result: FaceLandmarkerResult): Promise<Float32Array>;
+  describe(video: FaceSource, result: FaceLandmarkerResult): Promise<Float32Array>;
 };
+
+function sourceSize(src: FaceSource): [number, number] {
+  return src instanceof HTMLVideoElement ? [src.videoWidth, src.videoHeight] : [src.width, src.height];
+}
 
 let loading: Promise<FaceEngine> | null = null;
 
@@ -71,7 +78,8 @@ async function buildEngine(): Promise<FaceEngine> {
     async describe(video, result) {
       const lm = result.faceLandmarks[0];
       if (!lm) throw new Error('no face in this frame');
-      const t = fitSimilarity(fivePointsFromMediapipe(lm, video.videoWidth, video.videoHeight), CANONICAL_5);
+      const [w, h] = sourceSize(video);
+      const t = fitSimilarity(fivePointsFromMediapipe(lm, w, h), CANONICAL_5);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, CHIP_SIZE, CHIP_SIZE);

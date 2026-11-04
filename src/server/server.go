@@ -16,6 +16,7 @@ import (
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
 	captchamethod "github.com/sagearbor/personhood/src/methods/captcha-turnstile"
+	documentchip "github.com/sagearbor/personhood/src/methods/document-chip"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	emailtiermethod "github.com/sagearbor/personhood/src/methods/email-tier"
 	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
@@ -69,6 +70,10 @@ type Server struct {
 	// inPerson runs in-person vouching (inperson.go); nil unless
 	// IN_PERSON_VOUCH_ENABLED. revokeHolder penalizes vouchers through it.
 	inPerson *socialvouching.InPerson
+
+	// documentReviews lists dual-document review cases (documentanchor.go);
+	// nil unless DOCUMENT_CHIP_ANCHOR=1.
+	documentReviews documentchip.ReviewQueue
 
 	// methodPrerequisites maps a method id to methods the session must
 	// already hold (any one of them) before it may complete. Set by the
@@ -140,6 +145,10 @@ type Dependencies struct {
 
 	// InPersonVouch turns on in-person vouching (inperson.go); nil = off.
 	InPersonVouch *InPersonVouchOptions
+
+	// DocumentAnchor connects the document methods (documentanchor.go) to
+	// the server's identifier store; nil = off.
+	DocumentAnchor *documentAnchorDeps
 }
 
 // NewServer constructs a Server from cfg and deps. It returns an error if cfg
@@ -233,6 +242,11 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 	}
 	if deps.InPersonVouch != nil {
 		if err := s.wireInPersonVouch(deps.InPersonVouch, deps.VouchGraph); err != nil {
+			return nil, err
+		}
+	}
+	if deps.DocumentAnchor != nil {
+		if err := s.wireDocumentAnchor(deps.DocumentAnchor); err != nil {
 			return nil, err
 		}
 	}
@@ -456,6 +470,22 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		}
 	}
 
+	// document-chip + document-signed-qr: government documents signed by
+	// the issuing state, no vendor. DOCUMENT_CHIP_ANCHOR=1; see
+	// documentanchor.go and docs/document-chip-anchor.md.
+	chip, signedQR, docDeps, err := documentAnchorFromEnv()
+	if err != nil {
+		return Dependencies{}, fmt.Errorf("document anchor: %w", err)
+	}
+	if chip != nil {
+		if err := reg.Register(chip); err != nil {
+			return Dependencies{}, fmt.Errorf("register document-chip: %w", err)
+		}
+		if err := reg.Register(signedQR); err != nil {
+			return Dependencies{}, fmt.Errorf("register document-signed-qr: %w", err)
+		}
+	}
+
 	// paid-billing-card (checklist #9): the strongest single supplementary
 	// (strength 35) — a $0 Stripe SetupIntent with 3DS/SCA. Registered when
 	// STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET are set; STRIPE_PUBLISHABLE_KEY
@@ -637,6 +667,7 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		deps.VouchGraph = graph
 		deps.InPersonVouch = inPerson
 	}
+	deps.DocumentAnchor = docDeps
 
 	return deps, nil
 }
