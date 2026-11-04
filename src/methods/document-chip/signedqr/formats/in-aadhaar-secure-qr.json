@@ -1,0 +1,47 @@
+{
+  "_comment": "India Aadhaar Secure QR (UIDAI). The QR is a decimal integer; its bytes are zlib/gzip-compressed; fields are separated by 0xFF; the last 256 bytes are an RSA-2048 PKCS#1 v1.5 SHA-256 signature by UIDAI over everything before them. The QR carries only the last 4 digits of the Aadhaar number, so uniqueness uses last4 + birth date + gender + a hash of the enrolment photo, which UIDAI embeds unchanged in every QR it issues for that person. Keys: UIDAI's offline e-KYC signing certificates (copied from anon-aadhaar, MIT, packages/react/src/publicKeys.ts); add the current one from uidai.gov.in when UIDAI rotates it.",
+  "formats": [
+    {
+      "id": "in-aadhaar-secure-qr-v2",
+      "country": "IN",
+      "document": "aadhaar",
+      "encoding": "decimal-bigint",
+      "compression": "zlib-or-gzip",
+      "signature": {"placement": "trailing", "length": 256, "algorithm": "rsa-pkcs1v15-sha256"},
+      "delimiter": 255,
+      "detect": {"field": 0, "one_of": ["V2"]},
+      "fields": {"indicator": 1, "reference_id": 2, "name": 3, "dob": 4, "gender": 5},
+      "photo_after_delimiters": 18,
+      "trailing_hashes": {"indicator_field": "indicator", "bytes": {"0": 0, "1": 32, "2": 32, "3": 64}},
+      "signing_time": {"field": "reference_id", "from": 4, "to": 18, "layout": "20060102150405"},
+      "uniqueness": [
+        {"field": "reference_id", "from": 0, "to": 4},
+        {"field": "dob"},
+        {"field": "gender"},
+        {"photo_sha256": true}
+      ],
+      "keys": ["uidai-2021-02-26.pem", "uidai-2024-02-21.pem"]
+    },
+    {
+      "id": "in-aadhaar-secure-qr-v1",
+      "country": "IN",
+      "document": "aadhaar",
+      "encoding": "decimal-bigint",
+      "compression": "zlib-or-gzip",
+      "signature": {"placement": "trailing", "length": 256, "algorithm": "rsa-pkcs1v15-sha256"},
+      "delimiter": 255,
+      "detect": {"field": 0, "one_of": ["0", "1", "2", "3"]},
+      "fields": {"indicator": 0, "reference_id": 1, "name": 2, "dob": 3, "gender": 4},
+      "photo_after_delimiters": 16,
+      "trailing_hashes": {"indicator_field": "indicator", "bytes": {"0": 0, "1": 32, "2": 32, "3": 64}},
+      "signing_time": {"field": "reference_id", "from": 4, "to": 18, "layout": "20060102150405"},
+      "uniqueness": [
+        {"field": "reference_id", "from": 0, "to": 4},
+        {"field": "dob"},
+        {"field": "gender"},
+        {"photo_sha256": true}
+      ],
+      "keys": ["uidai-2021-02-26.pem", "uidai-2024-02-21.pem"]
+    }
+  ]
+}

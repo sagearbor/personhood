@@ -39,6 +39,7 @@ Sorted by the highest score any agent gave. Anchors satisfy `anchor_required: tr
 | `government-id-liveness` | 90 | — | 90 | $1.00 | med | ❌ | 🌟 | Passport/license + selfie liveness via Persona/Onfido. **Ship next as anchor #2.** |
 | `plaid-bank-link` | 90 | — | 88 | $1.50 | med | ❌ | 🌟 | Bank OAuth via Plaid. **Ship next as anchor #3.** Fast integration, well-understood. |
 | `in-person-partner-location` | 85 | — | — | $5.00 | high | ✅ | 🤔 | UPS/post office/NGO field agent enrollment. The airdrop-test answer; ops-heavy. |
+| `document-chip` / `document-signed-qr` | 80 / 60 | 80 / 60 | 80 / 60 | $0.00 | low | ⚠️ | ✅ | **Built (behind `DOCUMENT_CHIP_ANCHOR=1`).** ePassport/eID chip read over NFC, passive authentication against the ICAO/German master list, Active Authentication against clones, face bound to the chip photo on the phone; signed-QR national IDs (Aadhaar first) by camera. No vendor. Unique per document. Passive-only chips: 70. See `docs/document-chip-anchor.md`. |
 | `government-credential-federation` | 85 | — | — | $1.00 | med | ❌ | ✅ | ID.me / Login.gov SSO. Cheap to integrate where supported (US-centric). |
 | `live-video-review` | 80 | — | 82 | $8.00 | high | ⚠️ | 🤔 | Human reviewer on Zoom-style call. Defeats deepfakes; expensive; queue waits. |
 | `video-notary` | 75 | — | — | $25 | high | ❌ | ⏸ | RON. Legal weight, but expensive and US-state-specific. |

@@ -263,14 +263,14 @@ func (s *Server) handleBeginMethod(w http.ResponseWriter, r *http.Request) {
 	// canonical form (a phone number without its country code) is refused
 	// before anything is sent: it could be enrolled again under another
 	// spelling as a different person.
-	if kind := identifierKindForMethod(methodID); kind != "" && s.identifierKeys != nil {
+	if kind := identifierKindForMethod(methodID); identifierFromUserInput(kind) && s.identifierKeys != nil {
 		if _, err := normalizeIdentifier(kind, req.UserInput); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_identifier", err.Error())
 			return
 		}
 	}
 
-	if kind := identifierKindForMethod(methodID); kind != "" && s.identifierSends != nil {
+	if kind := identifierKindForMethod(methodID); identifierFromUserInput(kind) && s.identifierSends != nil {
 		if ok, wait := s.identifierSends.allow(s.identifierSendKey(kind, req.UserInput), s.nowFunc()); !ok {
 			secs := int(math.Ceil(wait.Seconds()))
 			if secs < 1 {

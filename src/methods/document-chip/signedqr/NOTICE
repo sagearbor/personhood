@@ -1,0 +1,11 @@
+formats/uidai-*.pem
+    UIDAI's public offline e-KYC / Secure QR signing certificates, as
+    collected in anon-aadhaar (https://github.com/anon-aadhaar/anon-aadhaar,
+    packages/react/src/publicKeys.ts, MIT License, Copyright (c) 2022
+    Ethereum Foundation). Public keys; UIDAI publishes them on uidai.gov.in.
+
+testdata/anon-aadhaar-test-qr.txt, testdata/anon-aadhaar-test-cert.pem
+    anon-aadhaar packages/circuits/assets/test.json and testCertificate.pem
+    (MIT License, Copyright (c) 2022 Ethereum Foundation): a real-format
+    Aadhaar Secure QR V2 payload with fictitious data, signed with
+    anon-aadhaar's test key.

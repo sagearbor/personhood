@@ -6,6 +6,16 @@
 
 ---
 
+## Document anchor (2026-11-04, behind `DOCUMENT_CHIP_ANCHOR=1`, default off)
+
+| Change | Path | What works |
+|---|---|---|
+| **ePassport / eID chip (ICAO 9303)** | `src/methods/document-chip/icao/`, `method.go` | Passive authentication: EF.SOD CMS signature, DSC to CSCA chain, DG hashes; RSA, RSA-PSS and ECDSA on any prime curve including brainpool and explicit parameters (stdlib only). Active Authentication (ISO 9796-2 RSA and ECDSA) over an issuer challenge, mandatory when the SOD lists DG15. Expired documents refused. Strength 80; 70 with `DOCUMENT_CHIP_ALLOW_PASSIVE_ONLY=1`. |
+| **CSCA trust** | `trust/DE_ML_*.ml`, `trust.go` | BSI German master list (609 certs, ~120 states incl. US, IN) embedded; its signature is checked against the pinned csca-germany SHA-256 published by BSI. Extra PEM via `DOCUMENT_CHIP_CSCA_PEM`. CRLs not checked yet. |
+| **Signed-QR IDs** | `signedqr/` | Data-driven formats (JSON + certs); Aadhaar Secure QR V1/V2 with UIDAI keys, key validity checked at the QR's signing time. Strength 60. UIDAI's post-2026-02 cert still to be added. |
+| **Uniqueness, privacy, dual documents** | `src/server/documentanchor.go`, `identifier.go` (kind `document`) | One identity per document through `IDENTIFIER_HMAC_KEY` seeds (required). Raw number, name, DOB never stored. Face match to the document photo is done on the phone (`app/web/app/face-bind`, loaded in the wallet's WebView); a face matching an identity enrolled with another document is issued and queued for review (`GET /v1/admin/document-reviews`), never refused. |
+
+Untested on a real chip yet (the vectors are openssl-generated ICAO-format files and the real German master list); see `docs/document-chip-anchor.md`.
 ## Never false-lockout (2026-11-04, behind `NO_FALSE_LOCKOUT=1`, default off)
 
 Owner principle: a signal may route or add friction, never shut out an honest person with no alternative. Design and audit: [docs/08-no-false-lockout.md](docs/08-no-false-lockout.md); the owner's edge-case list mapped to tests: [docs/EDGE_CASES.md](docs/EDGE_CASES.md).
