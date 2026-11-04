@@ -124,6 +124,17 @@ type Config struct {
 	// Env: HOLDER_REVOCATION_ENABLED.
 	HolderRevocation bool
 
+	// NoFalseLockout turns on the "never false-lockout an honest person"
+	// paths (nolockout.go): a selfie that matches an enrolled face is routed
+	// (recover your own identity, or continue with another anchor) instead
+	// of only refused; identity recovery onto a new holder key with a
+	// second factor and a cancel window; and, with AdminToken, a manual
+	// review queue, appeals and reinstatement. Needs HolderRevocation.
+	//
+	// Env: NO_FALSE_LOCKOUT. Tunables: see LockoutConfig.
+	NoFalseLockout bool
+	Lockout        LockoutConfig
+
 	// RateLimit bounds per-client request rates (see RateLimitConfig). The
 	// zero value disables it; LoadConfigFromEnv enables
 	// DefaultRateLimitConfig unless RATE_LIMIT=off.
@@ -171,6 +182,14 @@ func LoadConfigFromEnv() (Config, error) {
 		AdminToken:             strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
 		RequireHolderPoP:       envBool(os.Getenv("REQUIRE_HOLDER_POP")),
 		HolderRevocation:       envBool(os.Getenv("HOLDER_REVOCATION_ENABLED")),
+		NoFalseLockout:         envBool(os.Getenv("NO_FALSE_LOCKOUT")),
+	}
+	if cfg.NoFalseLockout {
+		lc, err := lockoutConfigFromEnv()
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Lockout = lc
 	}
 
 	if m := os.Getenv("SESSION_TTL_MINUTES"); m != "" {
@@ -237,6 +256,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SessionTTL <= 0 {
 		return errors.New("server: Config.SessionTTL must be positive")
+	}
+	if c.NoFalseLockout && !c.HolderRevocation {
+		return errors.New("server: NO_FALSE_LOCKOUT needs HOLDER_REVOCATION_ENABLED: recovery and appeals work on the holder ledger")
 	}
 	return nil
 }

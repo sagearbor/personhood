@@ -16,6 +16,19 @@
 | **Uniqueness, privacy, dual documents** | `src/server/documentanchor.go`, `identifier.go` (kind `document`) | One identity per document through `IDENTIFIER_HMAC_KEY` seeds (required). Raw number, name, DOB never stored. Face match to the document photo is done on the phone (`app/web/app/face-bind`, loaded in the wallet's WebView); a face matching an identity enrolled with another document is issued and queued for review (`GET /v1/admin/document-reviews`), never refused. |
 
 Untested on a real chip yet (the vectors are openssl-generated ICAO-format files and the real German master list); see `docs/document-chip-anchor.md`.
+## Never false-lockout (2026-11-04, behind `NO_FALSE_LOCKOUT=1`, default off)
+
+Owner principle: a signal may route or add friction, never shut out an honest person with no alternative. Design and audit: [docs/08-no-false-lockout.md](docs/08-no-false-lockout.md); the owner's edge-case list mapped to tests: [docs/EDGE_CASES.md](docs/EDGE_CASES.md).
+
+| Change | Path | What works |
+|---|---|---|
+| **Face-match routing** | `src/server/nolockout.go`, `fuzzy-extractor-selfie` `OnMatch` | A selfie that matches an enrolled face still returns `duplicate_person_detected`, plus `face_match` options: recover / not me (another anchor, K+2 in-person vouchers, at most 2 holders per face) / manual review. The same holder key is re-issued at once. The matched commitment stays server-side. |
+| **Recovery** | `src/server/recovery.go` | Moves an identity (same nullifier) to a new key: face match + email/phone, K old vouchers, or the same document; 72 h window in which either key cancels (`/v1/recovery/pending` for the old wallet, optional webhook); then the old key's credentials are revoked and the key barred. One in progress per identity, 30-day cooldown, review after 3 cancels. |
+| **Review, appeals, reinstatement** | `src/server/review.go`, `holderrevoke.go`, `social-vouching` `Reinstate` | `/v1/reviews`, `/v1/appeals`, admin queue + decide, `/v1/admin/reinstate`. Approval grants the `operator-review` anchor (50), opens an operator recovery, or reinstates: bans lifted, the equivocation proof pardoned (canonical digest), vouchers' strikes taken back. Ban refusals are worded neutrally and name the appeal. |
+| **Web** | `app/web/components/FaceMatchPanel.tsx`, `app/recovery/page.tsx`, `lib/lockout.ts` | Selfie step shows the three choices, remembers a pending recovery per key and offers Finish; `/recovery` lets the old phone see and cancel a recovery. |
+| **Edge-case harness** | `src/server/edge_cases_test.go` | 16 rows (twins, look-alikes, lost/stolen phone, family phone, old phone, wallet double-sign, vouch over video, no selfie, ...). |
+
+Not done: OpenLine wallet polling `/v1/recovery/pending`; web UI for a `no_selfie` review (API only); proof of life; the vouch store is still in memory.
 
 ## Selfie anchor for phones (2026-11-03, behind `SELFIE_ANCHOR=1`, default off)
 

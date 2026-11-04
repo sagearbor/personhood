@@ -80,6 +80,10 @@ type Server struct {
 	// in-person-vouch anchor policy.
 	methodPrerequisites map[string][]string
 
+	// lockout holds the no-false-lockout records (nolockout.go); nil
+	// unless Config.NoFalseLockout.
+	lockout *lockoutStore
+
 	// methodRoutes carries additional HTTP handlers a method plugin needs
 	// the server to host (e.g. third-party webhook receivers). Populated by
 	// the registry-builder helpers; mounted under /v1/methods/{id}/<path>
@@ -149,6 +153,11 @@ type Dependencies struct {
 	// DocumentAnchor connects the document methods (documentanchor.go) to
 	// the server's identifier store; nil = off.
 	DocumentAnchor *documentAnchorDeps
+
+	// SelfieMatches relays the selfie method's face matches to the server
+	// (NoFalseLockout routing). BuildDependencies sets it whenever it
+	// registers the selfie method; nil means matches are not routed.
+	SelfieMatches *SelfieMatchRelay
 }
 
 // NewServer constructs a Server from cfg and deps. It returns an error if cfg
@@ -247,6 +256,11 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 	}
 	if deps.DocumentAnchor != nil {
 		if err := s.wireDocumentAnchor(deps.DocumentAnchor); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.NoFalseLockout {
+		if err := s.wireNoFalseLockout(deps.SelfieMatches); err != nil {
 			return nil, err
 		}
 	}
@@ -604,18 +618,24 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		if _, err := rand.Read(key); err != nil {
 			return Dependencies{}, fmt.Errorf("fuzzy-extractor-selfie: liveness key: %w", err)
 		}
+		relay := &SelfieMatchRelay{}
 		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{
 			Accumulator: acc,
 			Liveness:    &fuzzyextractorselfie.LivenessConfig{Key: key},
 			Strength:    SelfieAnchorStrength,
+			OnMatch:     relay.OnMatch,
 		})
+		deps.SelfieMatches = relay
 		if err := reg.Register(fuzzy); err != nil {
 			return Dependencies{}, fmt.Errorf("register fuzzy-extractor-selfie: %w", err)
 		}
 	} else if os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
+		relay := &SelfieMatchRelay{}
 		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{
 			Accumulator: fuzzyextractorselfie.NewInMemoryAccumulator(),
+			OnMatch:     relay.OnMatch,
 		})
+		deps.SelfieMatches = relay
 		if err := reg.Register(fuzzy); err != nil {
 			return Dependencies{}, fmt.Errorf("register fuzzy-extractor-selfie: %w", err)
 		}

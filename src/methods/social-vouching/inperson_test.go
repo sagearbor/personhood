@@ -440,6 +440,36 @@ func TestInPerson_PenalizeCascade(t *testing.T) {
 
 }
 
+func TestInPerson_ReinstateUndoesPenalize(t *testing.T) {
+	h := newHarness(t, func(c *InPersonConfig) { c.Required = 1; c.MaxPerPeriod = 5 })
+	ctx := context.Background()
+	anchored, graphMember, honest := newPerson(t), newPerson(t), newPerson(t)
+	_ = h.graph.Enroll(ctx, graphMember.did, 0.8)
+	h.vouch(anchored, honest, "x")
+	h.vouch(graphMember, honest, "")
+	if _, err := h.ip.Penalize(ctx, honest.did); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := h.ip.Reinstate(ctx, honest.did)
+	if err != nil || rep.AlreadyRevoked || len(rep.Vouchers) != 2 || rep.Vouchers[anchored.did] != 0 {
+		t.Fatalf("reinstate = %+v, %v", rep, err)
+	}
+	if st, res := h.offer(anchored, "x"); st != 200 {
+		t.Fatalf("voucher after reinstate: %d %v", st, res)
+	}
+	if tr, _, _ := h.graph.TrustOf(ctx, graphMember.did); tr != 0.8 {
+		t.Fatalf("graph voucher trust = %v, want 0.8 restored", tr)
+	}
+	if r := h.completeAnchor(honest); !r.Success {
+		t.Fatalf("reinstated person's anchor: %+v", r)
+	}
+	// Idempotent.
+	if rep, err := h.ip.Reinstate(ctx, honest.did); err != nil || !rep.AlreadyRevoked || len(rep.Vouchers) != 0 {
+		t.Fatalf("second reinstate = %+v, %v", rep, err)
+	}
+}
+
 func TestInPerson_VouchesExpire(t *testing.T) {
 	h := newHarness(t, nil)
 	a, newcomer := newPerson(t), newPerson(t)

@@ -342,6 +342,7 @@ export default function Page() {
               issuer <code className="trunc">{session.issuer_did}</code>
             </span>
             {config?.in_person_vouch && <a href="/vouch">vouch for someone</a>}
+            {config?.no_false_lockout && <a href="/recovery">recovery check</a>}
           </footer>
         </>
       ) : config?.invite_code_required ? (

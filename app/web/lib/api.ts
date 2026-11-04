@@ -111,15 +111,44 @@ export class ApiError extends Error {
   readonly code?: string;
   /** Parsed Retry-After header (seconds), when the server sent one. */
   readonly retryAfterSeconds?: number;
+  /**
+   * The ways forward the issuer offered with a refusal (NO_FALSE_LOCKOUT
+   * deployments), and any other fields of its error object.
+   */
+  readonly nextSteps?: NextStep[];
+  readonly details?: Record<string, unknown>;
 
-  constructor(status: number, message: string, code?: string, retryAfterSeconds?: number) {
+  constructor(
+    status: number,
+    message: string,
+    code?: string,
+    retryAfterSeconds?: number,
+    nextSteps?: NextStep[],
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.nextSteps = nextSteps;
+    this.details = details;
   }
 }
+
+/** One way forward the issuer offers with a refusal or a face match. */
+export type NextStep = {
+  action: string;
+  endpoint?: string;
+  methods?: string[];
+  description: string;
+};
+
+/** Returned with a selfie whose face matched an enrolled person. */
+export type FaceMatchRouting = {
+  message: string;
+  options: NextStep[];
+};
 
 /**
  * Parses a Retry-After header value. Accepts delta-seconds or an HTTP date;
@@ -142,14 +171,22 @@ export function parseRetryAfter(value: string | null | undefined, now: number = 
 export function apiErrorFromResponse(status: number, raw: string, retryAfter?: string | null): ApiError {
   let detail = raw;
   let code: string | undefined;
+  let nextSteps: NextStep[] | undefined;
+  let details: Record<string, unknown> | undefined;
   try {
     const json = JSON.parse(raw);
     if (typeof json?.error?.message === 'string' && json.error.message) detail = json.error.message;
     code = typeof json?.error?.code === 'string' ? json.error.code : undefined;
+    if (Array.isArray(json?.error?.next_steps)) {
+      nextSteps = (json.error.next_steps as unknown[]).filter(
+        (s): s is NextStep => !!s && typeof (s as NextStep).action === 'string' && typeof (s as NextStep).description === 'string',
+      );
+    }
+    if (json?.error && typeof json.error === 'object') details = json.error as Record<string, unknown>;
   } catch {
     // not JSON; surface the raw body
   }
-  return new ApiError(status, `${status}: ${detail}`, code, parseRetryAfter(retryAfter));
+  return new ApiError(status, `${status}: ${detail}`, code, parseRetryAfter(retryAfter), nextSteps, details);
 }
 
 /** fetch() with a timeout; network failures and timeouts become ApiError. */
@@ -175,7 +212,7 @@ async function readJSON<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function postJSON<T>(path: string, body: unknown): Promise<T> {
+export async function postJSON<T>(path: string, body: unknown): Promise<T> {
   const res = await request(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -184,7 +221,7 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return readJSON<T>(res);
 }
 
-async function getJSON<T>(path: string): Promise<T> {
+export async function getJSON<T>(path: string): Promise<T> {
   return readJSON<T>(await request(path));
 }
 
@@ -242,6 +279,12 @@ export type ConfigResponse = {
   sms_delivery?: 'log' | 'twilio' | 'unknown';
   /** In-person vouch ceremony is on (IN_PERSON_VOUCH_ENABLED). Older servers omit it. */
   in_person_vouch?: boolean;
+  /** Face matches are routed and identity recovery is on (NO_FALSE_LOCKOUT). */
+  no_false_lockout?: boolean;
+  /** The manual review queue and appeals are mounted. */
+  manual_review?: boolean;
+  /** The recovery cancel window, in seconds. */
+  recovery_delay_seconds?: number;
 };
 
 export const DEFAULT_CONFIG: ConfigResponse = {
@@ -272,6 +315,11 @@ export function normalizeConfig(json: unknown): ConfigResponse {
   // sms_delivery stays absent when the server didn't send it, so "missing"
   // keeps meaning "older server, current behaviour".
   if (j.in_person_vouch === true) out.in_person_vouch = true;
+  if (j.no_false_lockout === true) out.no_false_lockout = true;
+  if (j.manual_review === true) out.manual_review = true;
+  if (typeof j.recovery_delay_seconds === 'number' && j.recovery_delay_seconds > 0) {
+    out.recovery_delay_seconds = j.recovery_delay_seconds;
+  }
   if (typeof j.sms_delivery === 'string') {
     out.sms_delivery = SMS_DELIVERY_VALUES.has(j.sms_delivery)
       ? (j.sms_delivery as ConfigResponse['sms_delivery'])
@@ -349,7 +397,7 @@ export async function completeMethod(
   methodID: string,
   sessionID: string,
   response: { type: string; payload: Record<string, unknown> },
-): Promise<{ result: MethodResult; session: SessionView }> {
+): Promise<{ result: MethodResult; session: SessionView; face_match?: FaceMatchRouting }> {
   return postJSON(`/v1/methods/${encodeURIComponent(methodID)}/complete`, {
     session_id: sessionID,
     response,
