@@ -296,7 +296,7 @@ func (p *InPerson) eligible(ctx context.Context, st VoucherStanding, now time.Ti
 		return eligibility{}, vErr(http.StatusForbidden, "voucher_revoked", "this credential's holder was found to be a duplicate or a cheater and can no longer vouch")
 	case now.Before(rec.SuspendedUntil):
 		return eligibility{}, vErr(http.StatusForbidden, "voucher_suspended",
-			"someone you vouched for was found to be fake; you can vouch again after "+rec.SuspendedUntil.UTC().Format("2006-01-02"))
+			"someone you vouched for was found to be fake; you can vouch again after "+rec.SuspendedUntil.UTC().Format("2006-01-02")+". "+AppealNote)
 	}
 	used := 0
 	for _, t := range rec.VouchTimes {
@@ -439,7 +439,7 @@ func (p *InPerson) AcceptHandler() http.HandlerFunc {
 		if rec, err := p.cfg.Store.Voucher(ctx, candidate); err != nil {
 			return nil, err
 		} else if rec.Revoked {
-			return nil, vErr(http.StatusForbidden, "candidate_revoked", "this key was found to belong to a duplicate or a cheater")
+			return nil, vErr(http.StatusForbidden, "candidate_revoked", "this key was found to belong to a duplicate or a cheater. "+AppealNote)
 		}
 		returnCode, err := newCode()
 		if err != nil {
@@ -639,6 +639,11 @@ func (p *InPerson) ConfirmHandler() http.HandlerFunc {
 
 var errWrongReturnCode = errors.New("wrong return code")
 
+// AppealNote ends refusals that come from a revocation, which a review can
+// undo: if the revoked person was honest, reinstating them also lifts the
+// strikes their vouchers took.
+const AppealNote = "If this is a mistake, the person who was revoked can appeal to the issuer; reinstating them also lifts their vouchers' strikes."
+
 func commitError(err error) error {
 	switch {
 	case errors.Is(err, ErrVoucherSuspended):
@@ -650,7 +655,7 @@ func commitError(err error) error {
 	case errors.Is(err, ErrAlreadyVouched):
 		return vErr(http.StatusConflict, "already_vouched", "you already vouched for this person")
 	case errors.Is(err, ErrCandidateRevoked):
-		return vErr(http.StatusForbidden, "candidate_revoked", "this person was found to be a duplicate or a cheater")
+		return vErr(http.StatusForbidden, "candidate_revoked", "this person was found to be a duplicate or a cheater. "+AppealNote)
 	}
 	return err
 }

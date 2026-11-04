@@ -201,6 +201,15 @@ Firestore (`personhood-holder-issuances/<sha256(DID)>`,
 `personhood-bans/<kind>-<sha256(value)>`, create-only), Redis
 (`personhood:<ns>:<id>`), or memory, chosen like every other store.
 
+### Appeals
+
+A revocation can be wrong: a wallet bug can sign one slot twice. With
+`NO_FALSE_LOCKOUT=1` and `ADMIN_TOKEN`, a banned holder appeals
+(`POST /v1/appeals`), an operator reviews, and approval reinstates them:
+bans lifted, the proof pardoned so it cannot ban again, and the vouchers'
+strikes taken back. See [08-no-false-lockout.md](08-no-false-lockout.md),
+section 3.
+
 ### Limits
 
 - Credentials issued before `HOLDER_REVOCATION_ENABLED` have no ledger record:
