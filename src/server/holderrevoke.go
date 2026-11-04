@@ -36,6 +36,7 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -57,6 +58,10 @@ import (
 const (
 	BanKindHolder    = "holder"
 	BanKindNullifier = "nullifier"
+	// BanKindPardon marks an equivocation proof (by its canonical digest)
+	// that an operator reviewed and found honest, such as a double-sign
+	// caused by a wallet bug. Re-submitting that proof does not ban again.
+	BanKindPardon = "pardon"
 )
 
 // IssuanceRecord is what the ledger keeps per issued credential.
@@ -87,6 +92,11 @@ type HolderLedger interface {
 	// before; the first record is kept.
 	Ban(ctx context.Context, kind, value string, rec BanRecord) (already bool, err error)
 	Banned(ctx context.Context, kind, value string) (bool, error)
+	// BanInfo returns the record of a ban, if there is one.
+	BanInfo(ctx context.Context, kind, value string) (BanRecord, bool, error)
+	// Unban removes a ban (an operator's reinstatement after review).
+	// Removing a ban that does not exist is not an error.
+	Unban(ctx context.Context, kind, value string) error
 }
 
 // NewHolderLedgerFromEnv picks Firestore, then Redis, then memory, like the
@@ -155,6 +165,20 @@ func (l *InMemoryHolderLedger) Banned(_ context.Context, kind, value string) (bo
 	return ok, nil
 }
 
+func (l *InMemoryHolderLedger) BanInfo(_ context.Context, kind, value string) (BanRecord, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	rec, ok := l.bans[kind+"\x00"+value]
+	return rec, ok, nil
+}
+
+func (l *InMemoryHolderLedger) Unban(_ context.Context, kind, value string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.bans, kind+"\x00"+value)
+	return nil
+}
+
 // ----------------------------------------------------------------------------
 // Firestore / Redis, through one small key-value shape
 // ----------------------------------------------------------------------------
@@ -164,6 +188,7 @@ type kv interface {
 	get(ctx context.Context, ns, id string) ([]byte, bool, error)
 	set(ctx context.Context, ns, id string, b []byte) error
 	create(ctx context.Context, ns, id string, b []byte) (bool, error)
+	del(ctx context.Context, ns, id string) error
 }
 
 type firestoreKV struct{ c *firestoreclient.Client }
@@ -177,6 +202,9 @@ func (f firestoreKV) set(ctx context.Context, ns, id string, b []byte) error {
 func (f firestoreKV) create(ctx context.Context, ns, id string, b []byte) (bool, error) {
 	return f.c.Create(ctx, ns, id, b)
 }
+func (f firestoreKV) del(ctx context.Context, ns, id string) error {
+	return f.c.Del(ctx, ns, id)
+}
 
 type redisKV struct{ c *redisclient.Client }
 
@@ -189,6 +217,64 @@ func (r redisKV) set(ctx context.Context, ns, id string, b []byte) error {
 }
 func (r redisKV) create(ctx context.Context, ns, id string, b []byte) (bool, error) {
 	return redisSetNX(ctx, r.c, r.key(ns, id), b)
+}
+func (r redisKV) del(ctx context.Context, ns, id string) error {
+	return r.c.Del(ctx, r.key(ns, id))
+}
+
+// memKV is the in-memory kv, for dev and tests.
+type memKV struct {
+	mu   sync.Mutex
+	docs map[string][]byte
+}
+
+func newMemKV() *memKV { return &memKV{docs: map[string][]byte{}} }
+
+func (m *memKV) get(_ context.Context, ns, id string) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.docs[ns+"\x00"+id]
+	return append([]byte(nil), b...), ok, nil
+}
+func (m *memKV) set(_ context.Context, ns, id string, b []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.docs[ns+"\x00"+id] = append([]byte(nil), b...)
+	return nil
+}
+func (m *memKV) create(_ context.Context, ns, id string, b []byte) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.docs[ns+"\x00"+id]; ok {
+		return false, nil
+	}
+	m.docs[ns+"\x00"+id] = append([]byte(nil), b...)
+	return true, nil
+}
+func (m *memKV) del(_ context.Context, ns, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.docs, ns+"\x00"+id)
+	return nil
+}
+
+// newKVFromEnv picks Firestore, then Redis, then memory, like every store.
+func newKVFromEnv() (kv, error) {
+	if projectID := os.Getenv("FIRESTORE_PROJECT_ID"); projectID != "" {
+		client, err := firestoreclient.New(projectID)
+		if err != nil {
+			return nil, fmt.Errorf("server: FIRESTORE_PROJECT_ID: %w", err)
+		}
+		return firestoreKV{client}, nil
+	}
+	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+		client, err := redisclient.ParseURL(redisURL)
+		if err != nil {
+			return nil, fmt.Errorf("server: REDIS_URL: %w", err)
+		}
+		return redisKV{client}, nil
+	}
+	return newMemKV(), nil
 }
 
 const (
@@ -259,6 +345,22 @@ func (l *kvHolderLedger) Ban(ctx context.Context, kind, value string, rec BanRec
 func (l *kvHolderLedger) Banned(ctx context.Context, kind, value string) (bool, error) {
 	_, found, err := l.kv.get(ctx, kvBansNS, kind+"-"+sha256Hex(value))
 	return found, err
+}
+
+func (l *kvHolderLedger) BanInfo(ctx context.Context, kind, value string) (BanRecord, bool, error) {
+	raw, found, err := l.kv.get(ctx, kvBansNS, kind+"-"+sha256Hex(value))
+	if err != nil || !found {
+		return BanRecord{}, false, err
+	}
+	var rec BanRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return BanRecord{}, false, fmt.Errorf("server: corrupt ban record: %w", err)
+	}
+	return rec, true, nil
+}
+
+func (l *kvHolderLedger) Unban(ctx context.Context, kind, value string) error {
+	return l.kv.del(ctx, kvBansNS, kind+"-"+sha256Hex(value))
 }
 
 // ----------------------------------------------------------------------------
@@ -367,7 +469,7 @@ func (s *Server) checkHolderBans(ctx context.Context, holder types.DID, commitme
 		return nil, err
 	}
 	if banned {
-		return &apiError{"holder_revoked", "this holder key was revoked for cheating and cannot be issued a credential"}, nil
+		return &apiError{"holder_revoked", "this holder key was revoked and cannot be issued a credential. " + appealHint}, nil
 	}
 	for _, c := range commitments {
 		banned, err = s.holders.Banned(ctx, BanKindNullifier, c)
@@ -375,7 +477,7 @@ func (s *Server) checkHolderBans(ctx context.Context, holder types.DID, commitme
 			return nil, err
 		}
 		if banned {
-			return &apiError{"nullifier_revoked", "the identity behind this enrollment was revoked for cheating and cannot enrol again"}, nil
+			return &apiError{"nullifier_revoked", "the identity behind this enrollment was revoked and cannot enrol again. " + appealHint}, nil
 		}
 	}
 	return nil, nil
@@ -402,11 +504,20 @@ func (s *Server) handleEquivocation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "proof_invalid", err.Error())
 		return
 	}
-	evidence, _ := json.Marshal(proof)
-	sum := sha256.Sum256(evidence)
+	digest := equivocationDigest(pub, proof)
+	pardoned, err := s.holders.Banned(r.Context(), BanKindPardon, digest)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "revoke_failed", err.Error())
+		return
+	}
+	if pardoned {
+		writeError(w, http.StatusConflict, "evidence_pardoned",
+			"an operator reviewed this exact proof and reinstated the holder; it does not revoke them again")
+		return
+	}
 	rep, err := s.revokeHolder(r.Context(), holder, BanRecord{
 		Reason:         "equivocation: " + proof.Context,
-		EvidenceDigest: hex.EncodeToString(sum[:]),
+		EvidenceDigest: digest,
 		At:             s.nowFunc(),
 	})
 	if err != nil {
@@ -415,6 +526,24 @@ func (s *Server) handleEquivocation(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, rep)
 }
+
+// equivocationDigest is a canonical digest of an equivocation proof: the
+// key, context and slot plus the two payload digests in sorted order, so
+// the same double-sign hashes the same however its JSON is spelled or its
+// statements are ordered. It is the ban's EvidenceDigest, and the key a
+// pardon is recorded under.
+func equivocationDigest(pub ed25519.PublicKey, p credential.EquivocationProof) string {
+	a, b := p.Statements[0].PayloadDigestHex, p.Statements[1].PayloadDigestHex
+	if b < a {
+		a, b = b, a
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{"personhood-equivocation-evidence/v1", hex.EncodeToString(pub), p.Context, p.Slot, a, b}, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// appealHint is appended to every refusal caused by a ban, so an honest
+// person who was banned by mistake knows the way back.
+const appealHint = "If you think this is a mistake, appeal with POST /v1/appeals (where the issuer accepts appeals) or contact the issuer's operator."
 
 type adminRevokeHolderRequest struct {
 	HolderDID string `json:"holder_did"`
