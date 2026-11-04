@@ -37,6 +37,9 @@
 #                                   firestore.googleapis.com and grants the compute service
 #                                   account roles/datastore.user. Falls back to REDIS_URL
 #                                   (unaffected by this script) or in-memory if unset.
+#   SELFIE_ANCHOR                   1 registers the selfie anchor with active liveness
+#                                   (docs/selfie-anchor.md). Default off. Needs
+#                                   FIRESTORE_PROJECT_ID so enrolled faces survive restarts.
 #
 # What this does, in order, and why it is safe to re-run:
 #   1. gcloud config set project
@@ -169,6 +172,9 @@ if [[ -n "${SMTP_HOST:-}" && -n "${SMTP_FROM:-}" ]]; then
 fi
 if [[ -n "${FIRESTORE_PROJECT_ID:-}" ]]; then
   ENV_VARS="${ENV_VARS}@FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT_ID}"
+fi
+if [[ "${SELFIE_ANCHOR:-}" == "1" ]]; then
+  ENV_VARS="${ENV_VARS}@SELFIE_ANCHOR=1"
 fi
 
 

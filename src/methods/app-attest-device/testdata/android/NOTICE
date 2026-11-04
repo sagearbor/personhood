@@ -1,0 +1,13 @@
+The *.pem and *.json files in this directory (except where noted) are copied
+unchanged from https://github.com/android/keyattestation (testdata/), which is
+Copyright Google LLC and licensed under the Apache License, Version 2.0.
+They are attestation certificate chains captured from real devices, with
+Google's decoding of each leaf. Fetched 2026-11-03.
+
+  caiman_sdk36_*_RKP           Pixel 9 Pro, Android 16, RKP keys, RSA root
+  tegu_sdk36_SB_EC_2026_ROOT   Pixel 9a, StrongBox, new ECDSA root (Key Attestation CA1)
+  akita_sdk34_TEE_EC_NONE      Pixel 8a, unlocked bootloader
+  blueline_sdk28_TEE_EC_NONE   Pixel 3, unlocked bootloader, factory batch key
+  invalid_malformed_rot_device_locked.pem   from testdata/invalid/
+
+The pinned roots in ../../roots/ come from https://android.googleapis.com/attestation/root.

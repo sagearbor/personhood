@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
-	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
 	captchamethod "github.com/sagearbor/personhood/src/methods/captcha-turnstile"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	emailtiermethod "github.com/sagearbor/personhood/src/methods/email-tier"
@@ -443,14 +443,14 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		}
 	}
 
-	// app-attest-device: registered when APP_ATTEST_SECRET is set. v0.1 uses the
-	// HMAC dev verifier; v0.2 swaps in real Apple App Attest / Play Integrity
-	// verification behind the same Verifier interface.
-	if appAttestSecret := os.Getenv("APP_ATTEST_SECRET"); appAttestSecret != "" {
-		appAttest := appattestmethod.NewMethod(appattestmethod.Config{
-			Verifier: appattestmethod.NewHMACDevVerifier(appAttestSecret),
-			Store:    appattestmethod.NewInMemoryStore(),
-		})
+	// app-attest-device: registered when ANDROID_KEY_ATTESTATION_PACKAGE
+	// (real Android Key Attestation) and/or APP_ATTEST_SECRET (the HMAC dev
+	// stand-in) is set. See appattest.go.
+	appAttest, err := appAttestFromEnv()
+	if err != nil {
+		return Dependencies{}, err
+	}
+	if appAttest != nil {
 		if err := reg.Register(appAttest); err != nil {
 			return Dependencies{}, fmt.Errorf("register app-attest-device: %w", err)
 		}
@@ -551,7 +551,38 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 	// vendor credential to gate on, so registration is instead an explicit
 	// opt-in via FUZZY_EXTRACTOR_ENABLED, consistent with this repo's
 	// pattern of not silently changing what a default deployment advertises.
-	if os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
+	//
+	// SELFIE_ANCHOR=1 is the version meant for real phones: the web app's
+	// on-device face model plus an active-liveness ceremony (random head /
+	// eye challenges, see the method's liveness.go), a durable accumulator,
+	// and strength 50 instead of 70. docs/selfie-anchor.md says what it
+	// does and does not prove. FUZZY_EXTRACTOR_ENABLED keeps the original
+	// template-only dev ceremony; the two are exclusive.
+	selfieAnchor := os.Getenv("SELFIE_ANCHOR") == "1"
+	if selfieAnchor && os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
+		return Dependencies{}, fmt.Errorf("fuzzy-extractor-selfie: set SELFIE_ANCHOR=1 or FUZZY_EXTRACTOR_ENABLED, not both")
+	}
+	if selfieAnchor {
+		acc, durable, err := NewSelfieAccumulatorFromEnv()
+		if err != nil {
+			return Dependencies{}, fmt.Errorf("fuzzy-extractor-selfie: %w", err)
+		}
+		if !durable {
+			log.Printf("WARNING: SELFIE_ANCHOR=1 without FIRESTORE_PROJECT_ID or REDIS_URL: enrolled faces are kept in memory and forgotten on restart, after which every face can enroll again")
+		}
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return Dependencies{}, fmt.Errorf("fuzzy-extractor-selfie: liveness key: %w", err)
+		}
+		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{
+			Accumulator: acc,
+			Liveness:    &fuzzyextractorselfie.LivenessConfig{Key: key},
+			Strength:    SelfieAnchorStrength,
+		})
+		if err := reg.Register(fuzzy); err != nil {
+			return Dependencies{}, fmt.Errorf("register fuzzy-extractor-selfie: %w", err)
+		}
+	} else if os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
 		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{
 			Accumulator: fuzzyextractorselfie.NewInMemoryAccumulator(),
 		})

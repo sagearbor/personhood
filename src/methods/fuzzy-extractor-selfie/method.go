@@ -57,6 +57,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sagearbor/personhood/pkg/types"
@@ -99,21 +100,49 @@ const (
 // Safe for concurrent use: all state lives in the injected Accumulator.
 type Method struct {
 	accumulator Accumulator
+	liveness    *LivenessConfig
+	strength    int
+
+	// enrollMu serializes the FindDuplicate-then-Add pair, so two
+	// enrollments of one face racing in this process cannot both pass the
+	// duplicate check. It does not cover several issuer processes sharing
+	// one store; the reference deployment runs one instance.
+	enrollMu sync.Mutex
 }
 
 // Config bundles NewMethod's dependencies.
 type Config struct {
 	// Accumulator is required.
 	Accumulator Accumulator
+
+	// Liveness, when set, requires the active-liveness ceremony
+	// (liveness.go) before a template is accepted. Nil keeps the original
+	// one-shot template-only ceremony.
+	Liveness *LivenessConfig
+
+	// Strength overrides MethodStrength on the method's metadata (and so on
+	// every credential it anchors). Zero means MethodStrength.
+	Strength int
 }
 
-// NewMethod constructs a Method. A nil Accumulator is a programmer error and
-// panics.
+// NewMethod constructs a Method. A nil Accumulator or an invalid
+// LivenessConfig is a programmer error and panics.
 func NewMethod(cfg Config) *Method {
 	if cfg.Accumulator == nil {
 		panic("fuzzy-extractor-selfie.NewMethod: Accumulator must not be nil")
 	}
-	return &Method{accumulator: cfg.Accumulator}
+	m := &Method{accumulator: cfg.Accumulator, strength: cfg.Strength}
+	if m.strength == 0 {
+		m.strength = MethodStrength
+	}
+	if cfg.Liveness != nil {
+		lc, err := cfg.Liveness.withDefaults()
+		if err != nil {
+			panic(err.Error())
+		}
+		m.liveness = lc
+	}
+	return m
 }
 
 // Metadata implements registry.Method.
@@ -121,7 +150,7 @@ func (m *Method) Metadata() types.MethodMetadata {
 	return types.MethodMetadata{
 		ID:                MethodID,
 		Type:              types.MethodTypeAnchor,
-		Strength:          MethodStrength,
+		Strength:          m.strength,
 		CostUSD:           MethodCostUSD,
 		UXFriction:        types.FrictionMed,
 		FreshnessLifetime: MethodFreshnessLifetime,
@@ -145,6 +174,24 @@ func (m *Method) IsAvailableForUser(_ types.UserContext) (bool, string) {
 func (m *Method) BeginCeremony(_ context.Context, cc types.CeremonyContext) (types.ChallengeData, error) {
 	if cc.SessionID == "" {
 		return types.ChallengeData{}, errors.New("fuzzy-extractor-selfie: CeremonyContext.SessionID is required")
+	}
+	if m.liveness != nil {
+		kinds, token, err := m.liveness.issueToken(cc.SessionID)
+		if err != nil {
+			return types.ChallengeData{}, err
+		}
+		return types.ChallengeData{
+			Type: "fuzzy-extractor-challenge",
+			Payload: map[string]any{
+				"template_bytes":    TemplateBytes,
+				"template_version":  m.liveness.TemplateVersion,
+				"liveness":          "active-v1",
+				"challenges":        kinds,
+				"challenge_token":   token,
+				"complete_endpoint": "/v1/methods/" + MethodID + "/complete",
+				"instructions":      "Run the challenges in the given order with the camera and the on-device face model, then submit template_b64, template_version, challenge_token and liveness.",
+			},
+		}, nil
 	}
 	return types.ChallengeData{
 		Type: "fuzzy-extractor-challenge",
@@ -181,6 +228,14 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: fmt.Sprintf("invalid_template_length:want=%d,got=%d", TemplateBytes, len(template))}, nil
 	}
 
+	if m.liveness != nil {
+		if reason := m.liveness.checkLiveness(cc.SessionID, resp.Payload); reason != "" {
+			return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: reason}, nil
+		}
+	}
+
+	m.enrollMu.Lock()
+	defer m.enrollMu.Unlock()
 	if _, found, err := m.accumulator.FindDuplicate(ctx, template); err != nil {
 		return types.MethodResult{}, fmt.Errorf("fuzzy-extractor-selfie: accumulator lookup: %w", err)
 	} else if found {

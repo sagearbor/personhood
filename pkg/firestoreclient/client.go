@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -318,4 +319,77 @@ func (c *Client) Del(ctx context.Context, collection, id string) error {
 		return fmt.Errorf("firestoreclient: delete %s/%s: status %d: %s", collection, id, resp.StatusCode, body)
 	}
 	return nil
+}
+
+// Doc is one document returned by List: its id and its blob.
+type Doc struct {
+	ID   string
+	Data []byte
+}
+
+// List returns every unexpired document in collection, following
+// pagination. Order is unspecified. It reads the whole collection, so it
+// is for small collections or scans that must see everything (the selfie
+// anchor's accumulator).
+func (c *Client) List(ctx context.Context, collection string) ([]Doc, error) {
+	var out []Doc
+	pageToken := ""
+	now := time.Now()
+	for {
+		u := fmt.Sprintf("%s/projects/%s/databases/(default)/documents/%s?pageSize=300",
+			c.baseURL, url.PathEscape(c.projectID), url.PathEscape(collection))
+		if pageToken != "" {
+			u += "&pageToken=" + url.QueryEscape(pageToken)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, fmt.Errorf("firestoreclient: build list request: %w", err)
+		}
+		if err := c.setAuth(ctx, req); err != nil {
+			return nil, err
+		}
+		resp, err := c.hc.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("firestoreclient: list %s: %w", collection, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("firestoreclient: read list response: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("firestoreclient: list %s: status %d: %s", collection, resp.StatusCode, body)
+		}
+		var page struct {
+			Documents     []fsDocument `json:"documents"`
+			NextPageToken string       `json:"nextPageToken"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("firestoreclient: parse list response: %w", err)
+		}
+		for _, doc := range page.Documents {
+			blob, ok := doc.Fields["blob"]
+			if !ok {
+				continue
+			}
+			if exp, ok := doc.Fields["expires_at"]; ok && exp.TimestampValue != "" {
+				if t, err := time.Parse(time.RFC3339Nano, exp.TimestampValue); err == nil && now.After(t) {
+					continue
+				}
+			}
+			raw, err := base64.StdEncoding.DecodeString(blob.BytesValue)
+			if err != nil {
+				return nil, fmt.Errorf("firestoreclient: decode blob field: %w", err)
+			}
+			id := doc.Name
+			if i := strings.LastIndexByte(id, '/'); i >= 0 {
+				id = id[i+1:]
+			}
+			out = append(out, Doc{ID: id, Data: raw})
+		}
+		if page.NextPageToken == "" {
+			return out, nil
+		}
+		pageToken = page.NextPageToken
+	}
 }
