@@ -1,6 +1,7 @@
 // Package appattestdevice implements the Personhood "app-attest-device"
-// supplementary verification method: standalone Apple App Attest (iOS) /
-// Google Play Integrity (Android) device attestation.
+// supplementary verification method: standalone device attestation. Android
+// uses Android Key Attestation, verified offline against Google's pinned
+// roots (androidkey.go); iOS App Attest is still a dev stand-in.
 //
 // On its own this is a near-free "floor" signal: it proves the request comes
 // from a genuine, non-emulated device running the real app, which kills
@@ -10,16 +11,18 @@
 // (well below the 50-point anchor threshold).
 //
 // Wire model (challenge/response with a server-issued nonce, mirroring sms):
-//   1. BeginCeremony generates a random nonce, stores it against the SessionID,
-//      and returns it in ChallengeData so the device can sign it.
-//   2. The client performs platform attestation over the nonce (App Attest on
-//      iOS, Play Integrity on Android) and POSTs the token back.
-//   3. CompleteCeremony looks up the stored nonce, hands the token + nonce to a
-//      pluggable Verifier, and on success records an attestation digest.
+//  1. BeginCeremony generates a random nonce, stores it against the SessionID,
+//     and returns it in ChallengeData so the device can sign it.
+//  2. The client performs platform attestation over the nonce (App Attest on
+//     iOS; on Android it generates a Keystore key whose attestation
+//     challenge is the nonce) and POSTs the token / certificate chain back.
+//  3. CompleteCeremony looks up the stored nonce, hands the token + nonce to a
+//     pluggable Verifier, and on success records an attestation digest.
 //
-// The default Verifier (HMACDevVerifier) is a v0.1 stand-in so the method is
-// fully testable without Apple/Google; production wires in real App Attest /
-// Play Integrity verifiers behind the same Verifier interface. See verifier.go.
+// HMACDevVerifier is a stand-in so the method is testable without
+// Apple/Google; AndroidKeyVerifier is the real Android verifier. Both sit
+// behind the Verifier interface (verifier.go); PlatformRouter picks one per
+// platform.
 package appattestdevice
 
 import (
@@ -53,7 +56,7 @@ const (
 	MethodID = "app-attest-device"
 
 	// MethodVersion tracks the plugin implementation version.
-	MethodVersion = "0.1.0"
+	MethodVersion = "0.2.0"
 
 	// MethodStrength is the on-credential supplementary point value. 18 is below
 	// the 50-point anchor threshold per docs/06-methods-catalog.md: real-device
@@ -61,8 +64,8 @@ const (
 	// phones, so it stays supplementary.
 	MethodStrength = 18
 
-	// MethodCostUSD is the per-verification cost. Apple App Attest and Google
-	// Play Integrity are free at the volumes Personhood targets.
+	// MethodCostUSD is the per-verification cost. Android Key Attestation is
+	// verified offline; Apple App Attest is free.
 	MethodCostUSD = 0.00
 
 	// MethodFreshnessLifetime is the on-credential freshness window. Device
@@ -77,15 +80,20 @@ const (
 type Method struct {
 	verifier Verifier
 	store    ChallengeStore
+	hints    DeviceHintLimiter
 	// newNonce generates the per-ceremony challenge nonce. Injectable for
 	// deterministic tests; defaults to 32 random bytes hex-encoded.
 	newNonce func() (string, error)
 }
 
-// Config bundles NewMethod's dependencies. Both fields are required.
+// Config bundles NewMethod's dependencies. Verifier and Store are required.
 type Config struct {
 	Verifier Verifier
 	Store    ChallengeStore
+
+	// HintLimiter, when set, caps sessions per Evidence.DeviceHint
+	// (hintlimit.go). Nil means no limit.
+	HintLimiter DeviceHintLimiter
 }
 
 // NewMethod constructs a Method. A nil Verifier or Store is a programmer error
@@ -100,6 +108,7 @@ func NewMethod(cfg Config) *Method {
 	return &Method{
 		verifier: cfg.Verifier,
 		store:    cfg.Store,
+		hints:    cfg.HintLimiter,
 		newNonce: defaultNonce,
 	}
 }
@@ -117,8 +126,8 @@ func (m *Method) Metadata() types.MethodMetadata {
 	}
 }
 
-// IsAvailableForUser implements registry.Method. App Attest / Play Integrity
-// require a mobile platform; web and kiosk clients have no equivalent.
+// IsAvailableForUser implements registry.Method. Device attestation needs
+// the native app; web and kiosk clients have no equivalent.
 func (m *Method) IsAvailableForUser(ctx types.UserContext) (bool, string) {
 	switch strings.ToLower(strings.TrimSpace(ctx.Platform)) {
 	case "web", "kiosk":
@@ -144,17 +153,22 @@ func (m *Method) BeginCeremony(ctx context.Context, cc types.CeremonyContext) (t
 	return types.ChallengeData{
 		Type: "app-attest-challenge",
 		Payload: map[string]any{
-			"nonce":             nonce,
+			"nonce": nonce,
+			// Android: the Keystore attestation challenge is the nonce's
+			// raw bytes (hex-decoded), not its text.
+			"nonce_encoding":    "hex",
 			"complete_endpoint": "/v1/methods/" + MethodID + "/complete",
 		},
 	}, nil
 }
 
 // CompleteCeremony implements registry.Method. It reads the platform, token,
-// and key_id from the response, looks up the stored nonce, and delegates to the
-// Verifier. Verifier errors are attributable to the device, so they surface as
-// Success:false (not a Go error); a non-nil error is reserved for internal
-// store failures.
+// and key_id from the response (Android may send certificate_chain, a JSON
+// array of base64 DER certificates, leaf first, instead of token), looks up
+// the stored nonce, and delegates to the Verifier. Verifier errors are
+// attributable to the device, so they surface as Success:false with the
+// VerifyError's reason (else "attestation_invalid"); a non-nil error is
+// reserved for internal store failures.
 func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext, resp types.ResponseData) (types.MethodResult, error) {
 	if cc.SessionID == "" {
 		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: "missing_session_id"}, nil
@@ -162,6 +176,9 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 
 	platform, _ := stringField(resp.Payload, "platform")
 	token, _ := stringField(resp.Payload, "token")
+	if token == "" {
+		token = chainField(resp.Payload, "certificate_chain")
+	}
 	keyID, _ := stringField(resp.Payload, "key_id")
 
 	nonce, err := m.store.GetChallenge(ctx, cc.SessionID)
@@ -182,8 +199,22 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 		Token:    token,
 		KeyID:    keyID,
 	}
-	if err := m.verifier.Verify(ctx, in); err != nil {
+	evidence, err := m.verifier.Verify(ctx, in)
+	if err != nil {
+		var ve *VerifyError
+		if errors.As(err, &ve) && ve.Reason != "" {
+			return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: ve.Reason}, nil
+		}
 		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: "attestation_invalid"}, nil
+	}
+	if m.hints != nil && evidence.DeviceHint != "" {
+		ok, err := m.hints.Allow(ctx, evidence.DeviceHint, cc.SessionID)
+		if err != nil {
+			return types.MethodResult{}, fmt.Errorf("app-attest-device: hint limiter: %w", err)
+		}
+		if !ok {
+			return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: "device_enrollment_limit"}, nil
+		}
 	}
 
 	return types.MethodResult{
@@ -194,8 +225,9 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 	}, nil
 }
 
-// HealthCheck implements registry.Method. No external dependency to probe; the
-// in-memory store and HMAC verifier are local. v0.1 is a no-op success.
+// HealthCheck implements registry.Method. Nothing to probe: verification is
+// offline, and the optional revocation list fails open or closed by config
+// rather than making the method unhealthy.
 func (m *Method) HealthCheck(_ context.Context) error { return nil }
 
 // defaultNonce returns 32 cryptographically-random bytes, hex-encoded.
@@ -220,6 +252,24 @@ func attestationDigest(sessionID, platform, keyID, nonce string) string {
 	h.Write([]byte{0})
 	h.Write([]byte(nonce))
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// chainField joins a JSON array of strings into the comma-separated token
+// form; "" if the field is missing or not an array of non-empty strings.
+func chainField(m map[string]any, key string) string {
+	arr, ok := m[key].([]any)
+	if !ok || len(arr) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(arr))
+	for _, v := range arr {
+		s, ok := v.(string)
+		if !ok || strings.TrimSpace(s) == "" {
+			return ""
+		}
+		parts = append(parts, strings.TrimSpace(s))
+	}
+	return strings.Join(parts, ",")
 }
 
 // stringField returns a trimmed, non-empty string field from a payload map,

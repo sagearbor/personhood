@@ -14,7 +14,6 @@ import (
 
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
-	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
 	captchamethod "github.com/sagearbor/personhood/src/methods/captcha-turnstile"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	emailtiermethod "github.com/sagearbor/personhood/src/methods/email-tier"
@@ -409,14 +408,14 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		}
 	}
 
-	// app-attest-device: registered when APP_ATTEST_SECRET is set. v0.1 uses the
-	// HMAC dev verifier; v0.2 swaps in real Apple App Attest / Play Integrity
-	// verification behind the same Verifier interface.
-	if appAttestSecret := os.Getenv("APP_ATTEST_SECRET"); appAttestSecret != "" {
-		appAttest := appattestmethod.NewMethod(appattestmethod.Config{
-			Verifier: appattestmethod.NewHMACDevVerifier(appAttestSecret),
-			Store:    appattestmethod.NewInMemoryStore(),
-		})
+	// app-attest-device: registered when ANDROID_KEY_ATTESTATION_PACKAGE
+	// (real Android Key Attestation) and/or APP_ATTEST_SECRET (the HMAC dev
+	// stand-in) is set. See appattest.go.
+	appAttest, err := appAttestFromEnv()
+	if err != nil {
+		return Dependencies{}, err
+	}
+	if appAttest != nil {
 		if err := reg.Register(appAttest); err != nil {
 			return Dependencies{}, fmt.Errorf("register app-attest-device: %w", err)
 		}
