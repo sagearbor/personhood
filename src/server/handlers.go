@@ -419,7 +419,10 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 	var routing *faceMatchRouting
 	if s.lockout != nil {
 		switch {
-		case methodID == fuzzyextractorselfie.MethodID && !result.Success && result.ErrorReason == fuzzyextractorselfie.ReasonDuplicate:
+		// The web and the native selfie share one accumulator, so a face
+		// match from either gets the same routing (recover / not me /
+		// review).
+		case isSelfieMethod(methodID) && !result.Success && result.ErrorReason == fuzzyextractorselfie.ReasonDuplicate:
 			res, rt, err := s.routeFaceMatch(ctx, sess, method.Metadata())
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "face_match_failed", err.Error())
@@ -572,7 +575,7 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	// verified an email or phone, the binding comes from that identifier's
 	// seed, so the same inbox always gets the same binding no matter how
 	// many device keys it enrolls with (identifier.go).
-	bio := biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.MethodID)
+	bio := selfieCommitment(view.VerifiedMethods)
 	if bio == "" && s.identifierKeys != nil {
 		for _, vm := range view.VerifiedMethods {
 			if kind := identifierKindForMethod(vm.MethodID); kind != "" && view.IdentifierKeys[kind] == "" {

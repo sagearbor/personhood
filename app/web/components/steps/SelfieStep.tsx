@@ -17,6 +17,7 @@ import {
   type ChallengeKind,
   type Phase as CeremonyPhase,
 } from '@/lib/face/liveness';
+import { arrowFor, browserCues, cuesFor, type CuePlayer } from '@/lib/face/cues';
 import { TEMPLATE_VERSION, averageDescriptors, binarizeDescriptor, bytesToBase64 } from '@/lib/face/binarize';
 
 // fuzzy-extractor-selfie's stable plugin id (src/methods/fuzzy-extractor-selfie).
@@ -81,6 +82,9 @@ export function SelfieStep({
   const [stepLabel, setStepLabel] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [debugLine, setDebugLine] = useState('');
+  const [arrow, setArrow] = useState<'left' | 'right' | null>(null);
+  const [passFlash, setPassFlash] = useState(0);
+  const cuesRef = useRef<CuePlayer | null>(null);
   // NO_FALSE_LOCKOUT: the face matched someone enrolled; the issuer's ways forward.
   const [routing, setRouting] = useState<FaceMatchRouting | null>(null);
   // A recovery this phone (holder key) started in an earlier session.
@@ -96,6 +100,7 @@ export function SelfieStep({
 
   function stopCamera() {
     cancelAnimationFrame(rafRef.current);
+    setArrow(null);
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
@@ -121,6 +126,9 @@ export function SelfieStep({
   }
 
   async function start() {
+    // Audio and speech must be unlocked inside the click that starts things.
+    cuesRef.current ??= browserCues();
+    cuesRef.current.prime();
     setErr(null);
     setPhase('loading');
     setStatusText('loading face model');
@@ -170,6 +178,7 @@ export function SelfieStep({
     let lastDesc = 0;
     let lastT = 0;
     let lastPrompt = '';
+    let lastPhase: CeremonyPhase | null = null;
 
     const tick = () => {
       if (!streamRef.current) return;
@@ -185,7 +194,16 @@ export function SelfieStep({
           fail(friendlyError(e));
           return;
         }
+        const passedBefore = ceremony.results.length;
         const p = ceremony.onFrame(s);
+        const passed = ceremony.results.length > passedBefore ? ceremony.results[ceremony.results.length - 1].kind : undefined;
+        const cues = cuesFor(lastPhase, p, passed);
+        if (cues.length > 0) {
+          cuesRef.current?.play(cues);
+          setArrow(arrowFor(p));
+          if (passed) setPassFlash((n) => n + 1);
+        }
+        lastPhase = p;
         const text = promptFor(p);
         if (text !== lastPrompt) {
           lastPrompt = text;
@@ -194,7 +212,8 @@ export function SelfieStep({
         }
         if (debug) {
           setDebugLine(
-            `faces ${s.faces} yaw ${s.yaw.toFixed(2)} blink ${s.blink.toFixed(2)} size ${s.size.toFixed(2)} ` +
+            `faces ${s.faces} yaw ${s.yaw.toFixed(2)} blink ${s.blink.toFixed(2)} ` +
+              `(open<${ceremony.blinkOpen().toFixed(2)} shut>${ceremony.blinkClosed().toFixed(2)}) size ${s.size.toFixed(2)} ` +
               `parallax [${ceremony.parallax.join(', ')}] ms [${ceremony.results.map((r) => r.ms).join(', ')}]`,
           );
         }
@@ -210,7 +229,14 @@ export function SelfieStep({
             .then((d) => {
               bucket.push(d);
               lastDesc = t;
+              const before = ceremony.phase;
               ceremony.addFrontalFrame(t);
+              const cues = cuesFor(before, ceremony.phase);
+              if (cues.length > 0) {
+                cuesRef.current?.play(cues);
+                setArrow(arrowFor(ceremony.phase));
+              }
+              lastPhase = ceremony.phase;
               busy = false;
               if (ceremony.phase.kind === 'done') void finish(ceremony, startDescs, endDescs, token);
             })
@@ -299,7 +325,9 @@ export function SelfieStep({
           {err && <p className="err">{err}</p>}
           <p className="prose">
             You will look at the camera, then do three short things in a random order: turn your head, blink, or bring the
-            phone closer. Good light helps. The first run downloads about 12 MB of face models.
+            phone closer. Turn the sound on: each step is spoken, with a beep and a buzz when it starts and when it is done,
+            so you can follow it while looking away. Glasses are fine; if the blink is not seen, face away from bright
+            light or take them off just for the blink. Good light helps. The first run downloads about 12 MB of face models.
           </p>
           <div className="row">
             <Button onClick={start}>{phase === 'error' ? 'Try again' : 'Start camera'}</Button>
@@ -340,6 +368,13 @@ export function SelfieStep({
             <div className="oval" aria-hidden />
           </div>
           {debug && <p className="debug">{debugLine}</p>}
+          {/* Large edge arrows, visible from the corner of the eye while turning. */}
+          {arrow && (
+            <div className={`edge edge-${arrow}`} aria-hidden>
+              <span>{arrow === 'left' ? '\u2190' : '\u2192'}</span>
+            </div>
+          )}
+          {passFlash > 0 && <div key={passFlash} className="passed" aria-hidden />}
           <div className="row">
             <Button
               variant="ghost"
@@ -411,6 +446,55 @@ export function SelfieStep({
           text-align: center;
           font-size: 20px;
           font-weight: 600;
+        }
+        .edge {
+          position: fixed;
+          top: 0;
+          bottom: 0;
+          width: 22vw;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: color-mix(in srgb, var(--accent) 35%, transparent);
+          pointer-events: none;
+          z-index: 50;
+          animation: edge-pulse 0.8s ease-in-out infinite alternate;
+        }
+        .edge-left {
+          left: 0;
+        }
+        .edge-right {
+          right: 0;
+        }
+        .edge span {
+          font-size: 18vw;
+          line-height: 1;
+          font-weight: 800;
+          color: var(--accent);
+        }
+        @keyframes edge-pulse {
+          from {
+            opacity: 0.55;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+        .passed {
+          position: fixed;
+          inset: 0;
+          border: 14px solid #22c55e;
+          pointer-events: none;
+          z-index: 51;
+          animation: passed-fade 0.9s ease-out forwards;
+        }
+        @keyframes passed-fade {
+          from {
+            opacity: 1;
+          }
+          to {
+            opacity: 0;
+          }
         }
         .debug {
           margin: 0;

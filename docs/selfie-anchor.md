@@ -182,7 +182,7 @@ SELFIE_EVAL_TEMPLATES=$PWD/tmp/selfie-eval/templates.json \
 | **Issuer database leak** | Templates are recoverable, and linkable to any photo of the person. | Helper data only. No photos or descriptors are stored. | Treat it as biometric data. |
 | **Photo-holder learns enrollment status** | The refusal reveals "this face is enrolled". | Duplicates are refused rather than re-issued (see above). | Membership is revealed; the nullifier is not. |
 
-### Pairing with Android key attestation
+### Pairing with Android key attestation (now built: see Native ceremony)
 
 The `android-key-attestation` method (built separately) can prove that a
 request came from a genuine, non-rooted Android device with a hardware-backed
@@ -200,17 +200,137 @@ session:
 The result is still "one identity per real phone, with a face that looks
 live", not "one per human". The false-match limit above still applies.
 
+## Native ceremony (`fuzzy-extractor-selfie-native`, `SELFIE_NATIVE=1`)
+
+The OpenLine Android wallet runs the same ceremony natively
+(`openline/mobile/modules/selfie-liveness`) and adds what a browser cannot:
+
+1. **Same face system.** The wallet runs the same two models (MediaPipe Face
+   Landmarker, dlib's ResNet with face-api's weights, ported to Kotlin and
+   checked against face-api's output), the same alignment, and the same
+   SimHash, so it sends a `dlib128-simhash256-v1` template. Native and web
+   enrollments share one accumulator and one lock: a face enrolled in one
+   is a duplicate in the other.
+2. **Attestation bound to the result.** `begin` returns an
+   `attestation_challenge` = SHA-256(tag, session id, challenge token). The
+   wallet makes a fresh Keystore key with that challenge, signs the whole
+   summary (template, challenge results, sensor trace) with it, and sends
+   the key's certificate chain. The issuer verifies the chain with
+   app-attest-device's Android verifier (genuine phone, locked bootloader,
+   verified boot, the configured package and signer) and the ECDSA
+   signature over the exact summary bytes.
+3. **A sensor trace the issuer judges itself** (`motion.go`). The wallet
+   records, on one clock, per camera frame the face position, size and mean
+   colour, the background's shift since the last frame and its mean colour,
+   and the gyroscope and accelerometer at 200 Hz. After the challenges the
+   person swings the phone for 3 s, then holds still for 8 screen colours
+   of 300 ms chosen by the issuer (derived from the token with the liveness
+   key, so unknown before `begin`). The issuer checks:
+   - **Rotation (required):** the image shift predicted from the gyro
+     (f x angle) must match the measured background shift (or the face's,
+     on a bare wall): Pearson r >= 0.9, gain 0.6-1.6, clock offset within
+     +-80 ms. A video not filmed by this camera during this motion fails.
+   - **Parallax (one of two):** a hand sweep also moves the phone, which
+     moves the near face more than the far background. Their gains against
+     the gyro must differ by >= 12%. A flat picture or a screen shows one
+     gain.
+   - **Flash (one of two):** the face's colour must follow the issuer's
+     colour sequence (r >= 0.6, amplitude >= 0.008 in chromaticity) and the
+     background must respond at most half as much. A replay does not know
+     the sequence; a screen in front of the camera reflects it evenly.
+   - Hand tremor (6-14 Hz share of gyro power) is logged, not judged.
+   Only scores leave the phone besides the template: no image, no
+   descriptor. The issuer logs one `motion {...}` line per ceremony.
+4. **Never a lock-out.** Any native-only failure (`native_*`,
+   `attestation_*`) is a fallback, not a refusal: the wallet resends the
+   same template, token and liveness evidence to `fuzzy-extractor-selfie`,
+   which accepts the native method's token (one LivenessConfig), and the
+   person enrolls at the web strength. A phone with no gyroscope (the
+   Android 6 Alcatel Pixi 4 is accelerometer-only) or no key attestation
+   goes to the web method directly. Web-ceremony reasons (a duplicate face,
+   implausible timing) are not retried.
+
+### What the native checks prove, and what they do not
+
+They prove that a real, locked phone running the real app produced this
+template from its own front camera, while that phone moved the way its
+own gyroscope says, in front of a scene with depth that reflected this
+session's screen colours. That closes the two "not stopped" rows of the
+threat table for this path: a scripted client has no attested key, and a
+virtual camera needs a rooted phone, which attestation refuses.
+
+They do **not** prove a unique human. A rented person, or one person with
+ten phones, passes. A 3D mask or a mannequin head in front of a real phone
+can pass parallax and flash. An attacker with a locked-bootloader root
+exploit could inject video, and would then need to render it in real time
+from the phone's own gyro (raising the cost from a script to a render
+rig). The face model's false-match rate is unchanged, so the cohort cap
+below still applies.
+
+### Thresholds: synthetic only, so far
+
+`motion_test.go` has a small physical simulator (pose, pivot, depths,
+gyro noise and bias, tracking noise, screen light). `go test -v -run
+TestNativeTrace_Rates` reports, on 600 captures each:
+
+| Case (simulated) | Result |
+|---|---|
+| Honest, whole modelled mix (20% bare wall, 30% daylight) | 10% fall back to web strength: half bare wall (`native_background_plain`), half "no depth seen" (daylight plus small pivot); 0.5% "inconsistent" |
+| Video replay with this phone's live IMU | 0.5% accepted |
+| Real phone filming a flat screen | 0% accepted |
+| Still phone / scripted IMU | 0% accepted |
+
+These are numbers for the model, not for phones. Rolling shutter, motion
+blur, front-camera crop and real tracking error will lower the honest
+rotation r; if it lands below 0.9 on real phones the threshold must move,
+and the replay rate with it (the sweep is a few seconds of smooth motion,
+so a random video correlates by chance more often than one would like;
+an issuer-timed sweep, "swing at each beep", is the next step if it
+does). No recorded traces exist yet; `TestNativeTraces_Recorded` replays
+any added under `testdata/native-traces/`. With
+`SELFIE_NATIVE_LOG_TRACES=1` a test issuer logs each trace as one
+`fuzzy-extractor-selfie-native: trace {...}` line in exactly that file
+format (set `expect` by hand: "fail" for a spoof run). It holds the face's
+mean colour per frame, so use it only on test issuers.
+
+## Glasses, and prompts you cannot read while turned away
+
+From the first Pixel 10 run (2026-11-04):
+
+- **Glasses.** The likeliest cause is the blink score. MediaPipe's
+  `eyeBlinkLeft/Right` blendshapes read 0.3-0.5 through glasses with the
+  eyes open (frames and lens glare cover part of the eye). The ceremony
+  needed "eyes open" (< 0.3) to take a frontal frame and to arm each
+  challenge, so with glasses it never started and timed out. It was not
+  the start/end same-face check (both ends have the glasses). The
+  thresholds now follow the person's own open-eye score (12 frontal
+  frames, 30th percentile): open is below baseline + 0.15, closed above
+  baseline + 0.3, never below the old fixed values. A blink challenge that
+  still times out now says why and what to do (face away from the light,
+  or take the glasses off just for the blink). `?selfiedebug=1` shows the
+  live thresholds. Glasses can still make a re-enrollment without them
+  look like a new face (the FNMR row above).
+- **Prompts.** During "turn your head" the screen is out of sight. Each
+  prompt is now spoken (Web Speech API on the web, Android text-to-speech
+  in the wallet's language natively), a tone and a vibration mark the
+  start and the pass of each challenge, large edge arrows show the turn
+  direction in peripheral vision, and a turn ends with "Good. Look back at
+  the screen." This also makes the ceremony usable with low vision.
+
 ## Recommended strength
 
 | Deployment | Recommended | Why |
 |---|---|---|
-| Web only (this PR) | **25-30**, supplementary | The scripted client and virtual camera are unstopped, and FMR caps the cohort. Fine as a recency/liveness signal, not as an anchor. |
-| Native app + Android key attestation + this ceremony, cohort under a few hundred | **50-55**, anchor floor | Device attestation raises the cost per identity to a real phone. Face dedupe is meaningful at small N. |
+| Web only | **25-30**, supplementary | The scripted client and virtual camera are unstopped, and FMR caps the cohort. Fine as a recency/liveness signal, not as an anchor. |
+| Native app + Android key attestation + this ceremony + sensor checks, cohort under a few hundred | **50-55**, anchor floor | Device attestation raises the cost per identity to a real phone; the sensor checks raise injected or replayed video to a render rig. Face dedupe is meaningful at small N. |
 | Any deployment at population scale | Do not rely on face dedupe | FMR 1e-3 per pair cannot dedupe thousands. Use vouching, in-person, or iris-class hardware. |
 
-The code advertises 50 under `SELFIE_ANCHOR=1` (`SelfieAnchorStrength`) so
-the test flow produces an anchored credential. **Do not open validator seats
-or value-bearing UBI on this anchor alone.**
+The code advertises 50 for the web method under `SELFIE_ANCHOR=1`
+(`SelfieAnchorStrength`) so the test flow produces an anchored credential,
+and **55** for the native method (`NativeMethodStrength`), the top of its
+recommended range. The gap is deliberately small: the native path removes
+the free attacks, not the cheap ones. **Do not open validator seats or
+value-bearing UBI on either alone.**
 
 ## Pixel 10: what the hardware can and cannot add
 
@@ -250,11 +370,12 @@ The owner's assumptions are **confirmed**:
 
 **What the lead deploys first:**
 
-1. Deploy the issuer (test mode) with `SELFIE_ANCHOR=1` and
-   `FIRESTORE_PROJECT_ID` set, so enrolled faces survive restarts:
+1. Deploy the **test** issuer with `SELFIE_ANCHOR=1` and in-memory stores
+   (no `FIRESTORE_PROJECT_ID`: arborfam-hub's Firestore is the live
+   issuer's database). Enrolled faces last as long as the instance:
    ```bash
    PROJECT=arborfam-hub WEB_ORIGIN=<live origins>,<preview-channel-origin> \
-     FIRESTORE_PROJECT_ID=arborfam-hub SELFIE_ANCHOR=1 INVITE_CODE=... \
+     SELFIE_ANCHOR=1 INVITE_CODE=... \
      bash scripts/deploy-cloudrun.sh
    ```
    - Check that `GET /v1/methods` lists `fuzzy-extractor-selfie`, anchor,
@@ -299,3 +420,37 @@ The owner's assumptions are **confirmed**:
 8. Report back the debug numbers from step 3 for a few runs (`ms` and
    `parallax`) and the pass/fail counts from steps 5 to 7. These are the
    first real-device FNMR and threshold data.
+
+## Test the native ceremony on a Pixel 10
+
+**What the lead deploys first** (test issuer only, never the live one):
+
+```
+SELFIE_ANCHOR=1
+SELFIE_NATIVE=1
+ANDROID_KEY_ATTESTATION_PACKAGE=org.openline.wallet
+ANDROID_KEY_ATTESTATION_SIGNER_SHA256=<signer cert SHA-256 printed by the APK build>
+ANDROID_KEY_ATTESTATION_REVOCATION=fail-open
+DEV_EXPOSE_CHALLENGE_SECRETS=1
+SELFIE_NATIVE_LOG_TRACES=1   # optional: log raw traces for calibration
+```
+
+**No `FIRESTORE_PROJECT_ID` and no `REDIS_URL`:** in arborfam-hub that
+Firestore is the live issuer's database. The test issuer runs on in-memory
+stores (the native method needs nothing else; `TestNativeSelfie_InMemory_*`
+covers it), so enrolled faces are forgotten whenever the instance
+restarts. Run the re-enrol and duplicate tests within one instance's
+lifetime (or keep `--min-instances=1 --max-instances=1` on the test
+service).
+
+`GET /v1/methods` must list `fuzzy-extractor-selfie` (50) and
+`fuzzy-extractor-selfie-native` (55). Then build and install the wallet APK
+from the OpenLine PR (its `docs/NATIVE_SELFIE.md` has the steps).
+
+**What to read in the issuer log** per run: `fuzzy-extractor-selfie-native:
+motion {...}` (rotation r, gain, lag, signs, parallax, flash r and
+amplitudes, tremor) and `success=... reason=...`. `signs` should be
+`[1,1]`; a rotation fail with a high r at signs other than `[1,1]` (the
+issuer only tries other signs with `NativeThresholds.FitSigns`) would mean
+this phone's axis mapping differs from the derivation in `motion.go`'s
+`predictedShift`: report it.

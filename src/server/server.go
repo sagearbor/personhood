@@ -629,6 +629,21 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		if err := reg.Register(fuzzy); err != nil {
 			return Dependencies{}, fmt.Errorf("register fuzzy-extractor-selfie: %w", err)
 		}
+		// SELFIE_NATIVE=1 adds the native-wallet ceremony: same faces,
+		// same accumulator, plus Android Key Attestation over a signed
+		// summary and camera/IMU/screen-light checks (the method's
+		// native.go). It needs the Android attestation settings.
+		if os.Getenv("SELFIE_NATIVE") == "1" {
+			native, err := selfieNativeFromEnv(fuzzy)
+			if err != nil {
+				return Dependencies{}, err
+			}
+			if err := reg.Register(native); err != nil {
+				return Dependencies{}, fmt.Errorf("register %s: %w", fuzzyextractorselfie.NativeMethodID, err)
+			}
+		}
+	} else if os.Getenv("SELFIE_NATIVE") == "1" {
+		return Dependencies{}, fmt.Errorf("SELFIE_NATIVE=1 needs SELFIE_ANCHOR=1")
 	} else if os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
 		relay := &SelfieMatchRelay{}
 		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{

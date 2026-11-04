@@ -54,7 +54,7 @@ type InPersonVouchOptions struct {
 }
 
 // DefaultDedupeMethods is IN_PERSON_VOUCH_DEDUPE_METHODS' default.
-var DefaultDedupeMethods = []string{"fuzzy-extractor-selfie"}
+var DefaultDedupeMethods = []string{"fuzzy-extractor-selfie", "fuzzy-extractor-selfie-native"}
 
 // inPersonOptionsFromEnv returns nil when IN_PERSON_VOUCH_ENABLED is unset.
 func inPersonOptionsFromEnv() (*InPersonVouchOptions, error) {
@@ -112,6 +112,7 @@ func (s *Server) wireInPersonVouch(opts *InPersonVouchOptions, graph socialvouch
 	if graph == nil {
 		return fmt.Errorf("server: in-person vouching needs Dependencies.VouchGraph (BuildDependencies sets it)")
 	}
+	var dedupe []string // the dedupe methods this issuer actually runs
 	if opts.Anchor {
 		if !s.cfg.HolderRevocation {
 			return fmt.Errorf("server: IN_PERSON_VOUCH_ANCHOR needs HOLDER_REVOCATION_ENABLED: the anchor's strength rests on penalizing vouchers when a fake is caught")
@@ -122,6 +123,7 @@ func (s *Server) wireInPersonVouch(opts *InPersonVouchOptions, graph socialvouch
 				found = append(found, id)
 			}
 		}
+		dedupe = found
 		if len(found) == 0 {
 			return fmt.Errorf("server: IN_PERSON_VOUCH_ANCHOR: none of the dedupe methods %v is registered, so nobody could ever complete in-person-vouch", opts.DedupeMethods)
 		}
@@ -156,7 +158,7 @@ func (s *Server) wireInPersonVouch(opts *InPersonVouchOptions, graph socialvouch
 		if err := s.registry.Register(socialvouching.NewAnchorMethod(p)); err != nil {
 			return fmt.Errorf("register in-person-vouch: %w", err)
 		}
-		s.methodPrerequisites = map[string][]string{id: opts.DedupeMethods}
+		s.methodPrerequisites = map[string][]string{id: dedupe}
 	}
 	return nil
 }

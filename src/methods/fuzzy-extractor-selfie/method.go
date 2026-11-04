@@ -233,16 +233,9 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: "missing_session_id"}, nil
 	}
 
-	templateB64, _ := stringField(resp.Payload, "template_b64")
-	if templateB64 == "" {
-		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: "missing_template"}, nil
-	}
-	template, err := base64.StdEncoding.DecodeString(templateB64)
-	if err != nil {
-		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: "invalid_template_encoding"}, nil
-	}
-	if len(template) != TemplateBytes {
-		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: fmt.Sprintf("invalid_template_length:want=%d,got=%d", TemplateBytes, len(template))}, nil
+	template, reason := decodeTemplate(resp.Payload)
+	if reason != "" {
+		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: reason}, nil
 	}
 
 	if m.liveness != nil {
@@ -250,18 +243,41 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 			return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: reason}, nil
 		}
 	}
+	return m.enroll(ctx, cc.SessionID, MethodID, template)
+}
 
+// decodeTemplate reads template_b64 from a complete payload; the string is
+// an ErrorReason when it fails.
+func decodeTemplate(payload map[string]any) ([]byte, string) {
+	templateB64, _ := stringField(payload, "template_b64")
+	if templateB64 == "" {
+		return nil, "missing_template"
+	}
+	template, err := base64.StdEncoding.DecodeString(templateB64)
+	if err != nil {
+		return nil, "invalid_template_encoding"
+	}
+	if len(template) != TemplateBytes {
+		return nil, fmt.Sprintf("invalid_template_length:want=%d,got=%d", TemplateBytes, len(template))
+	}
+	return template, ""
+}
+
+// enroll runs the duplicate check and, for a new face, stores it. methodID
+// names the method on the result (the web or the native ceremony); both
+// share this Method's accumulator and lock, so they are one dedupe system.
+func (m *Method) enroll(ctx context.Context, sessionID, methodID string, template []byte) (types.MethodResult, error) {
 	m.enrollMu.Lock()
 	defer m.enrollMu.Unlock()
 	if rec, found, err := m.accumulator.FindDuplicate(ctx, template); err != nil {
 		return types.MethodResult{}, fmt.Errorf("fuzzy-extractor-selfie: accumulator lookup: %w", err)
 	} else if found {
 		if m.onMatch != nil {
-			if err := m.onMatch(ctx, cc.SessionID, rec.Commitment); err != nil {
+			if err := m.onMatch(ctx, sessionID, rec.Commitment); err != nil {
 				return types.MethodResult{}, fmt.Errorf("fuzzy-extractor-selfie: on match: %w", err)
 			}
 		}
-		return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: ReasonDuplicate}, nil
+		return types.MethodResult{Success: false, MethodID: methodID, ErrorReason: ReasonDuplicate}, nil
 	}
 
 	helper, commitment, err := Gen(template)
@@ -275,7 +291,7 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 
 	return types.MethodResult{
 		Success:           true,
-		MethodID:          MethodID,
+		MethodID:          methodID,
 		VerifiedAt:        now,
 		AttestationDigest: commitment.Hex(),
 	}, nil

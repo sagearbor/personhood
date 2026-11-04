@@ -397,7 +397,7 @@ func (s *Server) routeFaceMatch(ctx context.Context, sess SessionView, method ty
 		return types.MethodResult{}, nil, err
 	}
 	if known && holder == sess.HolderDID && strings.HasPrefix(string(holder), "did:key:") {
-		res := types.MethodResult{Success: true, MethodID: fuzzyextractorselfie.MethodID, VerifiedAt: s.nowFunc(), AttestationDigest: fm.Commitment}
+		res := types.MethodResult{Success: true, MethodID: method.ID, VerifiedAt: s.nowFunc(), AttestationDigest: fm.Commitment}
 		if err := s.sessions.RecordMethodResult(sess.ID, res, method); err != nil {
 			return types.MethodResult{}, nil, err
 		}
@@ -411,7 +411,7 @@ func (s *Server) faceMatchOptions() *faceMatchRouting {
 	var others []string
 	for _, m := range s.registry.List() {
 		md := m.Metadata()
-		if md.Type == types.MethodTypeAnchor && md.ID != fuzzyextractorselfie.MethodID && md.ID != OperatorReviewMethodID {
+		if md.Type == types.MethodTypeAnchor && !isSelfieMethod(md.ID) && md.ID != OperatorReviewMethodID {
 			others = append(others, md.ID)
 		}
 	}
@@ -562,7 +562,7 @@ func (s *Server) lockoutRecordIssuance(ctx context.Context, view SessionView, co
 			return err
 		}
 	}
-	if bio := biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.MethodID); bio != "" {
+	if bio := selfieCommitment(view.VerifiedMethods); bio != "" {
 		bioNB := NullifierBindingForBiometricCommitment(bio).Commitment
 		holderNB := ""
 		if b := NullifierBindingForHolder(view.HolderPublicKey); b != nil {
