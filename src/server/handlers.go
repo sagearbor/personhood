@@ -515,6 +515,10 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	// seed, so the same inbox always gets the same binding no matter how
 	// many device keys it enrolls with (identifier.go).
 	bio := biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.MethodID)
+	if bio == "" {
+		// The native ceremony enrolls into the same accumulator.
+		bio = biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.NativeMethodID)
+	}
 	if bio == "" && s.identifierKeys != nil {
 		for _, vm := range view.VerifiedMethods {
 			if kind := identifierKindForMethod(vm.MethodID); kind != "" && view.IdentifierKeys[kind] == "" {

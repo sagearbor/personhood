@@ -45,23 +45,12 @@ func appAttestFromEnv() (*appattestmethod.Method, error) {
 		return appattestmethod.NewMethod(cfg), nil
 	}
 
-	signers, err := appattestmethod.ParseSignerDigests(os.Getenv("ANDROID_KEY_ATTESTATION_SIGNER_SHA256"))
+	akv, err := androidKeyVerifierFromEnv()
 	if err != nil {
-		return nil, fmt.Errorf("ANDROID_KEY_ATTESTATION_SIGNER_SHA256: %w", err)
-	}
-	mode, err := appattestmethod.ParseRevocationMode(os.Getenv("ANDROID_KEY_ATTESTATION_REVOCATION"))
-	if err != nil {
-		return nil, fmt.Errorf("ANDROID_KEY_ATTESTATION_REVOCATION: %w", err)
-	}
-	akc := appattestmethod.AndroidKeyConfig{PackageName: pkg, SignerDigests: signers}
-	if mode != appattestmethod.RevocationOff {
-		akc.Revocation = appattestmethod.NewStatusList(appattestmethod.StatusListConfig{
-			URL:  strings.TrimSpace(os.Getenv("ANDROID_KEY_ATTESTATION_STATUS_URL")),
-			Mode: mode,
-		})
+		return nil, err
 	}
 	router := appattestmethod.PlatformRouter{
-		appattestmethod.PlatformAndroid: appattestmethod.NewAndroidKeyVerifier(akc),
+		appattestmethod.PlatformAndroid: akv,
 	}
 	if secret != "" {
 		router[appattestmethod.PlatformIOS] = appattestmethod.NewHMACDevVerifier(secret)
@@ -78,4 +67,31 @@ func appAttestFromEnv() (*appattestmethod.Method, error) {
 		}
 	}
 	return appattestmethod.NewMethod(cfg), nil
+}
+
+// androidKeyVerifierFromEnv builds the Android Key Attestation verifier from
+// the ANDROID_KEY_ATTESTATION_* variables above, or nil when
+// ANDROID_KEY_ATTESTATION_PACKAGE is unset. app-attest-device and the
+// native selfie ceremony (SELFIE_NATIVE) use the same settings.
+func androidKeyVerifierFromEnv() (*appattestmethod.AndroidKeyVerifier, error) {
+	pkg := strings.TrimSpace(os.Getenv("ANDROID_KEY_ATTESTATION_PACKAGE"))
+	if pkg == "" {
+		return nil, nil
+	}
+	signers, err := appattestmethod.ParseSignerDigests(os.Getenv("ANDROID_KEY_ATTESTATION_SIGNER_SHA256"))
+	if err != nil {
+		return nil, fmt.Errorf("ANDROID_KEY_ATTESTATION_SIGNER_SHA256: %w", err)
+	}
+	mode, err := appattestmethod.ParseRevocationMode(os.Getenv("ANDROID_KEY_ATTESTATION_REVOCATION"))
+	if err != nil {
+		return nil, fmt.Errorf("ANDROID_KEY_ATTESTATION_REVOCATION: %w", err)
+	}
+	akc := appattestmethod.AndroidKeyConfig{PackageName: pkg, SignerDigests: signers}
+	if mode != appattestmethod.RevocationOff {
+		akc.Revocation = appattestmethod.NewStatusList(appattestmethod.StatusListConfig{
+			URL:  strings.TrimSpace(os.Getenv("ANDROID_KEY_ATTESTATION_STATUS_URL")),
+			Mode: mode,
+		})
+	}
+	return appattestmethod.NewAndroidKeyVerifier(akc), nil
 }
