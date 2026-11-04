@@ -380,6 +380,22 @@ the README), nobody can ever pass the ceremony. See
 for the vouch-submission flow and why this stays supplementary rather than
 an anchor despite STATUS.md's checklist wording.
 
+**In-person vouching and the no-documents anchor** — a QR round trip
+between the voucher's phone (`/vouch`) and the newcomer's (an "In-person
+vouch" step in enrollment). Vouchers prove themselves with their own
+credential, so no secret or seed list is needed. Full design, API and what it
+does and does not prove:
+[`docs/07-in-person-vouch-and-holder-revocation.md`](docs/07-in-person-vouch-and-holder-revocation.md).
+
+```bash
+FUZZY_EXTRACTOR_ENABLED=1          # the dedupe the anchor requires
+HOLDER_REVOCATION_ENABLED=1        # bans + equivocation endpoint; required by the anchor
+IN_PERSON_VOUCH_ENABLED=1          # ceremony + social-vouching-graph points
+IN_PERSON_VOUCH_ANCHOR=1           # in-person-vouch anchor (strength 55)
+IN_PERSON_VOUCH_MIN_VOUCHER_AGE_DAYS=30   # for real users
+# IN_PERSON_VOUCH_REQUIRED=1       # only for a two-phone test
+```
+
 **Try it locally** (mirrors §4's local dev flow, using
 [`docs/policies/airdrop-anchor-example.yaml`](docs/policies/airdrop-anchor-example.yaml)):
 

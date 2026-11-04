@@ -31,6 +31,9 @@ import (
 //	GET  /v1/methods/email/verify              — magic-link landing
 //	POST /v1/credentials/issue                 — issue the W3C VC
 //	GET  /v1/status-list/{listId}              — public revocation list
+//	POST /v1/revocations/equivocation          — HOLDER_REVOCATION_ENABLED: revoke a double-signer
+//	POST /v1/admin/revoke-holder               — HOLDER_REVOCATION_ENABLED + ADMIN_TOKEN
+//	*    /v1/methods/in-person-vouch/{offer,accept,confirm,status} — IN_PERSON_VOUCH_ENABLED
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(requestLogger)
@@ -69,6 +72,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/status-list/{listId}", s.handleStatusList)
 		if s.cfg.AdminToken != "" {
 			r.Post("/admin/revoke", s.handleAdminRevoke)
+		}
+		if s.holders != nil {
+			// Public: an equivocation proof verifies itself.
+			r.Post("/revocations/equivocation", s.handleEquivocation)
+			if s.cfg.AdminToken != "" {
+				r.Post("/admin/revoke-holder", s.handleAdminRevokeHolder)
+			}
 		}
 
 		// Method-owned routes (e.g. third-party webhook receivers). Mounted

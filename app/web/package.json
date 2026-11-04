@@ -2,7 +2,7 @@
   "name": "@personhood/web",
   "private": true,
   "version": "0.1.0",
-  "description": "Personhood reference enrollment PWA \u2014 Next.js 16 App Router",
+  "description": "Personhood reference enrollment PWA — Next.js 16 App Router",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build && node scripts/fix-static-export-icons.mjs",
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "next": "16.4.2",
+    "qrcode-generator": "2.0.4",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

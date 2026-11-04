@@ -240,6 +240,8 @@ export type ConfigResponse = {
    * server log — see smsUsable().
    */
   sms_delivery?: 'log' | 'twilio' | 'unknown';
+  /** In-person vouch ceremony is on (IN_PERSON_VOUCH_ENABLED). Older servers omit it. */
+  in_person_vouch?: boolean;
 };
 
 export const DEFAULT_CONFIG: ConfigResponse = {
@@ -269,6 +271,7 @@ export function normalizeConfig(json: unknown): ConfigResponse {
   };
   // sms_delivery stays absent when the server didn't send it, so "missing"
   // keeps meaning "older server, current behaviour".
+  if (j.in_person_vouch === true) out.in_person_vouch = true;
   if (typeof j.sms_delivery === 'string') {
     out.sms_delivery = SMS_DELIVERY_VALUES.has(j.sms_delivery)
       ? (j.sms_delivery as ConfigResponse['sms_delivery'])

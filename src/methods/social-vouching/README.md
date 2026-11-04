@@ -14,6 +14,24 @@ candidate has accumulated enough vouches to pass.
 | Freshness | 90 days |
 | Airdrop test | ✅ passes (no ID/bank/address required) |
 
+## In-person vouching and the `in-person-vouch` anchor
+
+This module also holds the practical, document-free path: a QR round trip
+between the voucher's phone and the newcomer's, where each holder key signs a
+code only the other screen showed (`inperson.go`), a separate
+`in-person-vouch` **anchor** (strength 55, `anchor.go`) that needs K anchored
+vouchers plus a selfie dedupe, and the accountability rules that penalize
+vouchers when someone they vouched for is caught (`accountability.go`). In
+that path the voucher authenticates with their own Personhood credential and
+holder key, which is the "v0.2" authenticator the section on
+`HMACDevAuthenticator` below asks for; the HMAC route remains a dev tool.
+In-person vouches are also recorded into this graph, so
+`social-vouching-graph` below counts them.
+
+Design, wire format, flags, what the ceremony does **not** prove, and how it
+fits OpenLine's on-chain vouching:
+[`docs/07-in-person-vouch-and-holder-revocation.md`](../../../docs/07-in-person-vouch-and-holder-revocation.md).
+
 ## Why supplementary, not an anchor
 
 STATUS.md's checklist #10b calls this "the `social-vouching-graph`

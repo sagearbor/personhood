@@ -10,6 +10,7 @@ import { SmsStep } from '@/components/steps/SmsStep';
 import { IdStep } from '@/components/steps/IdStep';
 import { SelfieStep } from '@/components/steps/SelfieStep';
 import { CredentialStep } from '@/components/steps/CredentialStep';
+import { VouchStep } from '@/components/steps/VouchStep';
 import {
   startEnrollment,
   getConfig,
@@ -173,13 +174,23 @@ export default function Page() {
   // is only logging mail instead of sending it. Either way, EmailStep shows
   // the on-screen magic link when the begin response actually includes one.
   const emailDevMode = !!config && (config.challenge_secrets_exposed || config.email_delivery === 'log');
+  // In-person vouching (IN_PERSON_VOUCH_ENABLED): the newcomer side of the
+  // QR round trip. Completes the in-person-vouch anchor when the issuer
+  // registers it, else social-vouching-graph points. Placed after the
+  // selfie, which the anchor needs first.
+  const vouchAvailable =
+    !!config?.in_person_vouch &&
+    !!session?.available_methods.some((m) => m.id === 'in-person-vouch' || m.id === 'social-vouching-graph');
+  const vouchIsAnchor = !!session?.available_methods.some((m) => m.id === 'in-person-vouch');
   const stepOrder: StepId[] = [
     'email',
     ...(smsAvailable ? (['sms'] as StepId[]) : []),
     'id',
     ...(selfieAvailable ? (['selfie'] as StepId[]) : []),
+    ...(vouchAvailable ? (['vouch'] as StepId[]) : []),
     'credential',
   ];
+  const nextAfter = (id: StepId): StepId => stepOrder[stepOrder.indexOf(id) + 1] ?? 'credential';
   const onSessionExpired = () => setSessionExpired(true);
 
   function markCompleted(id: StepId) {
@@ -264,11 +275,11 @@ export default function Page() {
                 onVerified={() => markCompleted('id')}
                 onSkip={() => {
                   markSkipped('id');
-                  setStep(selfieAvailable ? 'selfie' : 'credential');
+                  setStep(nextAfter('id'));
                 }}
                 onContinue={() => {
                   markCompleted('id');
-                  setStep(selfieAvailable ? 'selfie' : 'credential');
+                  setStep(nextAfter('id'));
                 }}
               />
             )}
@@ -281,10 +292,26 @@ export default function Page() {
                 onVerified={() => markCompleted('selfie')}
                 onSkip={() => {
                   markSkipped('selfie');
-                  setStep('credential');
+                  setStep(nextAfter('selfie'));
                 }}
                 onContinue={() => {
                   markCompleted('selfie');
+                  setStep(nextAfter('selfie'));
+                }}
+              />
+            )}
+            {step === 'vouch' && vouchAvailable && (
+              <VouchStep
+                session={session}
+                onSessionExpired={onSessionExpired}
+                done={completed.has('vouch')}
+                onVerified={() => markCompleted('vouch')}
+                onSkip={() => {
+                  markSkipped('vouch');
+                  setStep('credential');
+                }}
+                onContinue={() => {
+                  markCompleted('vouch');
                   setStep('credential');
                 }}
               />
@@ -296,7 +323,8 @@ export default function Page() {
                 credential={credential}
                 hasAnchor={
                   (completed.has('id') && !skipped.has('id')) ||
-                  (completed.has('selfie') && !skipped.has('selfie'))
+                  (completed.has('selfie') && !skipped.has('selfie')) ||
+                  (vouchIsAnchor && completed.has('vouch') && !skipped.has('vouch'))
                 }
                 onIssued={(c) => {
                   setCredential(c);
@@ -313,6 +341,7 @@ export default function Page() {
             <span>
               issuer <code className="trunc">{session.issuer_did}</code>
             </span>
+            {config?.in_person_vouch && <a href="/vouch">vouch for someone</a>}
           </footer>
         </>
       ) : config?.invite_code_required ? (

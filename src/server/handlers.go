@@ -124,6 +124,15 @@ type serverConfigResponse struct {
 	// HolderPoPRequired reports whether issuance needs holder_proof_b64
 	// from sessions that declared a holder key (REQUIRE_HOLDER_POP).
 	HolderPoPRequired bool `json:"holder_pop_required"`
+
+	// HolderRevocation reports whether equivocation proofs and holder bans
+	// are on (HOLDER_REVOCATION_ENABLED).
+	HolderRevocation bool `json:"holder_revocation"`
+
+	// InPersonVouch reports whether the in-person vouch ceremony routes are
+	// mounted (IN_PERSON_VOUCH_ENABLED). The web app shows "Vouch for
+	// someone" only then.
+	InPersonVouch bool `json:"in_person_vouch"`
 }
 
 // issueCredentialRequest is the JSON body of POST /v1/credentials/issue.
@@ -162,6 +171,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		SMSDelivery:             s.smsDelivery,
 		IdentifierDedup:         s.identifierKeys != nil,
 		HolderPoPRequired:       s.cfg.RequireHolderPoP,
+		HolderRevocation:        s.holders != nil,
+		InPersonVouch:           s.inPerson != nil,
 	})
 }
 
@@ -333,6 +344,17 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.sessions.Get(req.SessionID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "session_not_found", err.Error())
+		return
+	}
+
+	// A method with prerequisites (the in-person-vouch anchor needs a
+	// selfie dedupe first, see inperson.go) is not run until the session
+	// holds one of them.
+	if need := s.missingPrerequisite(methodID, sess); need != nil {
+		writeJSON(w, http.StatusOK, completeMethodResponse{
+			Result:  types.MethodResult{Success: false, MethodID: methodID, ErrorReason: "prerequisite_missing:" + strings.Join(need, "|")},
+			Session: sess,
+		})
 		return
 	}
 
@@ -509,6 +531,27 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	if bio != "" {
 		nullifierBinding = NullifierBindingForBiometricCommitment(bio)
 	}
+	// With holder revocation on, every nullifier seed this session touched
+	// is checked against the ban list and recorded, not only the one the
+	// credential carries, so a revoked person can't come back through
+	// another of their seeds (see holderrevoke.go).
+	var seedCommitments []string
+	if s.holders != nil {
+		seedCommitments, err = s.sessionNullifierCommitments(r.Context(), view, nullifierBinding, bio != "")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "identifier_seed_failed", err.Error())
+			return
+		}
+		apiErr, err := s.checkHolderBans(r.Context(), view.HolderDID, seedCommitments)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "ban_check_failed", err.Error())
+			return
+		}
+		if apiErr != nil {
+			writeError(w, http.StatusForbidden, apiErr.code, apiErr.message)
+			return
+		}
+	}
 	// Every credential gets a random slot in the status list so it can be
 	// revoked later (see RevocationStore). A slot claimed for a request
 	// that then fails stays unused, which is harmless.
@@ -525,6 +568,16 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	if err := s.revocations.Bind(r.Context(), statusIndex, cred.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "status_slot_failed", err.Error())
 		return
+	}
+	// Record the issuance before handing the credential out, so a holder
+	// revocation can always find it. On failure the client retries the
+	// session; the unused credential is never returned.
+	if s.holders != nil {
+		rec := IssuanceRecord{CredentialID: cred.ID, NullifierCommitments: seedCommitments, IssuedAt: issuedAt}
+		if err := s.holders.RecordIssuance(r.Context(), view.HolderDID, rec); err != nil {
+			writeError(w, http.StatusInternalServerError, "issuance_record_failed", err.Error())
+			return
+		}
 	}
 	if err := s.sessions.MarkIssued(req.SessionID, cred.ID); err != nil {
 		// Already-issued races are reported as 409; everything else as 500.
@@ -599,10 +652,7 @@ type adminRevokeResponse struct {
 // handleAdminRevoke sets a credential's revocation bit. Mounted only when
 // Config.AdminToken is set; the caller must send it as a Bearer token.
 func (s *Server) handleAdminRevoke(w http.ResponseWriter, r *http.Request) {
-	const prefix = "Bearer "
-	got := r.Header.Get("Authorization")
-	if !strings.HasPrefix(got, prefix) ||
-		subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(got, prefix)), []byte(s.cfg.AdminToken)) != 1 {
+	if !s.adminAuthorized(r) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "a valid admin bearer token is required")
 		return
 	}
@@ -625,6 +675,15 @@ func (s *Server) handleAdminRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, adminRevokeResponse{CredentialID: req.CredentialID, StatusListIndex: idx, AlreadyRevoked: already})
+}
+
+// adminAuthorized reports whether r carries the admin bearer token. Admin
+// routes are mounted only when Config.AdminToken is set.
+func (s *Server) adminAuthorized(r *http.Request) bool {
+	const prefix = "Bearer "
+	got := r.Header.Get("Authorization")
+	return s.cfg.AdminToken != "" && strings.HasPrefix(got, prefix) &&
+		subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(got, prefix)), []byte(s.cfg.AdminToken)) == 1
 }
 
 func (s *Server) handleDIDDocument(w http.ResponseWriter, _ *http.Request) {
