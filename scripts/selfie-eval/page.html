@@ -1,0 +1,28 @@
+<!doctype html><meta charset="utf-8"><body><script type="module">
+// Runs the web app's own alignment + descriptor code (lib/face) over every
+// photo in the dataset and posts the descriptors back to eval.mjs.
+import { FilesetResolver, FaceLandmarker } from '/nm/@mediapipe/tasks-vision/vision_bundle.mjs';
+import * as faceapi from '/nm/@vladmandic/face-api/dist/face-api.esm.js';
+import { fitSimilarity, fivePointsFromMediapipe, CANONICAL_5, CHIP_SIZE } from '/lib/align.js';
+const log = (m) => fetch('/log', { method: 'POST', body: String(m) });
+try {
+  const list = await (await fetch('/list')).json();
+  const fs = await FilesetResolver.forVisionTasks('/nm/@mediapipe/tasks-vision/wasm');
+  const lm = await FaceLandmarker.createFromOptions(fs, { baseOptions: { modelAssetPath: '/model/face_landmarker.task' }, runningMode: 'IMAGE', numFaces: 1 });
+  await faceapi.tf.ready();
+  await faceapi.nets.faceRecognitionNet.loadFromUri('/nm/@vladmandic/face-api/model');
+  const chip = document.createElement('canvas'); chip.width = chip.height = CHIP_SIZE;
+  const ctx = chip.getContext('2d');
+  const out = [];
+  for (const item of list) {
+    const img = new Image(); img.src = '/data/' + item.path; await img.decode();
+    const r = lm.detect(img);
+    if (!r.faceLandmarks.length) { out.push({ ...item, error: 'no face' }); continue; }
+    const t = fitSimilarity(fivePointsFromMediapipe(r.faceLandmarks[0], img.naturalWidth, img.naturalHeight), CANONICAL_5);
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CHIP_SIZE, CHIP_SIZE);
+    ctx.setTransform(t.a, t.b, -t.b, t.a, t.tx, t.ty); ctx.drawImage(img, 0, 0);
+    out.push({ ...item, descriptor: Array.from(await faceapi.computeFaceDescriptor(chip)) });
+  }
+  await fetch('/results', { method: 'POST', body: JSON.stringify(out) });
+} catch (e) { await log('ERR ' + e.stack); await fetch('/results', { method: 'POST', body: '[]' }); }
+</script>

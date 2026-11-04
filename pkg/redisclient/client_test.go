@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,11 @@ func TestReadReply(t *testing.T) {
 		{"empty bulk", "$0\r\n\r\n", Reply{Type: ReplyBulk, Str: ""}, false},
 		{"nil bulk", "$-1\r\n", Reply{Type: ReplyNil}, false},
 		{"error", "-ERR bad thing\r\n", Reply{}, true},
-		{"unsupported array", "*2\r\n$1\r\na\r\n$1\r\nb\r\n", Reply{}, true},
+		{"array", "*2\r\n$1\r\na\r\n:7\r\n", Reply{Type: ReplyArray, Array: []Reply{{Type: ReplyBulk, Str: "a"}, {Type: ReplyInteger, Int: 7}}}, false},
+		{"empty array", "*0\r\n", Reply{Type: ReplyArray, Array: []Reply{}}, false},
+		{"nil array", "*-1\r\n", Reply{Type: ReplyNil}, false},
+		{"truncated array", "*2\r\n$1\r\na\r\n", Reply{}, true},
+		{"unsupported type", "%1\r\n", Reply{}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -48,7 +53,7 @@ func TestReadReply(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error for %q: %v", tc.in, err)
 			}
-			if got != tc.want {
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("readReply(%q) = %+v, want %+v", tc.in, got, tc.want)
 			}
 		})
