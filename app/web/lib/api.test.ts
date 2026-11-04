@@ -33,6 +33,12 @@ describe('normalizeConfig', () => {
     });
   });
 
+  it('reports in_person_vouch only when the server says true', () => {
+    expect(normalizeConfig({ in_person_vouch: true }).in_person_vouch).toBe(true);
+    expect(normalizeConfig({ in_person_vouch: 'yes' }).in_person_vouch).toBeUndefined();
+    expect(normalizeConfig({}).in_person_vouch).toBeUndefined();
+  });
+
   it('accepts each known email_delivery value', () => {
     for (const v of ['log', 'smtp', 'sendgrid', 'unknown'] as const) {
       expect(normalizeConfig({ email_delivery: v }).email_delivery).toBe(v);

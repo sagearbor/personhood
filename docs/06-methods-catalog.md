@@ -59,6 +59,7 @@ Sorted by the highest score any agent gave. Supplementaries never satisfy `ancho
 | `paid-billing-card` | — | — | 35 | $0.30 | med | ❌ | 🌟 | Real card pre-auth (Twitter Blue / OpenAI tier-1 pattern). **Strongest single supplementary; ship next.** |
 | `credit-header-triangulation` | 35 | — | — | $0.75 | low | ❌ | ⏸ | LexisNexis-style depth check. Synthetic-ID detector; thin-file exclusion. |
 | `social-vouching-graph` | — | 35 | — | $0.00 | high | ✅ | ✅ | BrightID web-of-trust. Airdrop-compatible; cold-start hard; great for v0.3 community drive. |
+| `in-person-vouch` | 55 | — | — | $0.00 | high | ✅ | ✅ | **Implemented** (`docs/07-…`). K anchored vouchers confirm a live QR round trip, plus a selfie dedupe in the same session. Strength rests on voucher accountability (quota, strikes, suspension), not proximity, which a relay can fake. |
 | `zk-credential-aggregation` | — | 35 | — | $0.02 | med | ⚠️ | 🤔 | Sismo/Privado ID ZK stamp predicates. Privacy-preserving; same source-weakness as stamp-stacking. |
 | `tax-id-ssn-match` | 30 | — | — | $0.50 | low | ❌ | ❌ | Post-Equifax-breach this is mostly broken. Skip. |
 | `property-mortgage-records-match` | 30 | — | — | $0.50 | low | ❌ | ⏸ | LexisNexis property records. Excludes renters; controversial source. |

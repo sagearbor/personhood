@@ -73,6 +73,10 @@ type GraphStore interface {
 	// Enroll records id's own trust score once its ceremony has succeeded,
 	// so it can vouch for others afterwards.
 	Enroll(ctx context.Context, id string, trust float64) error
+
+	// Remove deletes id's trust score and the vouches recorded for it, so a
+	// member proven fake can no longer vouch or graduate (accountability.go).
+	Remove(ctx context.Context, id string) error
 }
 
 // InMemoryGraphStore is a mutex-protected GraphStore suitable for dev,
@@ -139,5 +143,14 @@ func (g *InMemoryGraphStore) Enroll(_ context.Context, id string, trust float64)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.trust[id] = trust
+	return nil
+}
+
+// Remove implements GraphStore.
+func (g *InMemoryGraphStore) Remove(_ context.Context, id string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.trust, id)
+	delete(g.vouches, id)
 	return nil
 }

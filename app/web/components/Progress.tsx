@@ -2,7 +2,7 @@
 // Active pill scans (animated background), completed pills are filled in
 // accent, future pills are dimmed.
 
-export type StepId = 'email' | 'sms' | 'id' | 'selfie' | 'credential';
+export type StepId = 'email' | 'sms' | 'id' | 'selfie' | 'vouch' | 'credential';
 
 const DEFAULT_ORDER: StepId[] = ['email', 'sms', 'id', 'credential'];
 
@@ -18,6 +18,8 @@ const LABELS: Record<StepId, { label: string }> = {
   // their 4-step layout is byte-for-byte unchanged from before this step
   // existed.
   selfie: { label: 'Selfie anchor' },
+  // "vouch" appears only when the issuer has in-person vouching on.
+  vouch: { label: 'In-person vouch' },
   credential: { label: 'Credential' },
 };
 

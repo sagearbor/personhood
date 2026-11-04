@@ -115,6 +115,15 @@ type Config struct {
 	// Env: REQUIRE_HOLDER_POP.
 	RequireHolderPoP bool
 
+	// HolderRevocation turns on holder revocation (holderrevoke.go): the
+	// issuer records each issuance per holder, refuses issuance to revoked
+	// holders and banned nullifier seeds, and mounts POST
+	// /v1/revocations/equivocation (public) and, with AdminToken, POST
+	// /v1/admin/revoke-holder. Required by the in-person-vouch anchor.
+	//
+	// Env: HOLDER_REVOCATION_ENABLED.
+	HolderRevocation bool
+
 	// RateLimit bounds per-client request rates (see RateLimitConfig). The
 	// zero value disables it; LoadConfigFromEnv enables
 	// DefaultRateLimitConfig unless RATE_LIMIT=off.
@@ -161,6 +170,7 @@ func LoadConfigFromEnv() (Config, error) {
 		EnrollmentInviteCode:   strings.TrimSpace(os.Getenv("ENROLLMENT_INVITE_CODE")),
 		AdminToken:             strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
 		RequireHolderPoP:       envBool(os.Getenv("REQUIRE_HOLDER_POP")),
+		HolderRevocation:       envBool(os.Getenv("HOLDER_REVOCATION_ENABLED")),
 	}
 
 	if m := os.Getenv("SESSION_TTL_MINUTES"); m != "" {

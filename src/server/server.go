@@ -62,6 +62,19 @@ type Server struct {
 	// when RateLimit.IdentifierSendsPerHour is 0.
 	identifierSends *identifierSendLimiter
 
+	// holders is the holder-revocation ledger (holderrevoke.go); nil unless
+	// Config.HolderRevocation.
+	holders HolderLedger
+
+	// inPerson runs in-person vouching (inperson.go); nil unless
+	// IN_PERSON_VOUCH_ENABLED. revokeHolder penalizes vouchers through it.
+	inPerson *socialvouching.InPerson
+
+	// methodPrerequisites maps a method id to methods the session must
+	// already hold (any one of them) before it may complete. Set by the
+	// in-person-vouch anchor policy.
+	methodPrerequisites map[string][]string
+
 	// methodRoutes carries additional HTTP handlers a method plugin needs
 	// the server to host (e.g. third-party webhook receivers). Populated by
 	// the registry-builder helpers; mounted under /v1/methods/{id}/<path>
@@ -120,6 +133,13 @@ type Dependencies struct {
 	// Twilio), so a client knows a phone number would get no message.
 	// Surfaced on GET /v1/config as sms_delivery.
 	SMSSenderKind string
+
+	// VouchGraph is the trust graph social-vouching-graph was built with
+	// (nil when it is not registered). In-person vouching records into it.
+	VouchGraph socialvouching.GraphStore
+
+	// InPersonVouch turns on in-person vouching (inperson.go); nil = off.
+	InPersonVouch *InPersonVouchOptions
 }
 
 // NewServer constructs a Server from cfg and deps. It returns an error if cfg
@@ -184,7 +204,14 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		emailDelivery = emailmethod.SenderKindUnknown
 	}
 
-	return &Server{
+	var holders HolderLedger
+	if cfg.HolderRevocation {
+		if holders, err = NewHolderLedgerFromEnv(); err != nil {
+			return nil, fmt.Errorf("server: holder ledger: %w", err)
+		}
+	}
+
+	s := &Server{
 		cfg:                cfg,
 		emailDelivery:      emailDelivery,
 		smsDelivery:        firstNonEmpty(deps.SMSSenderKind, SMSDeliveryUnknown),
@@ -199,10 +226,17 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		identifierKeys:     keyer,
 		identifiers:        identifiers,
 		identifierSends:    sends,
-		methodRoutes:       deps.MethodRoutes,
+		holders:            holders,
+		methodRoutes:       append([]methodRoute(nil), deps.MethodRoutes...),
 		nowFunc:            func() time.Time { return time.Now().UTC() },
 		credentialLifetime: 365 * 24 * time.Hour,
-	}, nil
+	}
+	if deps.InPersonVouch != nil {
+		if err := s.wireInPersonVouch(deps.InPersonVouch, deps.VouchGraph); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 // IssuerDID returns the issuer's did:web identifier. Exposed for tests and
@@ -559,14 +593,20 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 
 	// social-vouching-graph (checklist #10b): the BrightID-style web-of-
 	// trust supplementary method. Like fuzzy-extractor-selfie, no vendor is
-	// involved; registration is opt-in via SOCIAL_VOUCHING_ENABLED because
-	// the method is useless without an operator-configured seed set
-	// (SOCIAL_VOUCHING_SEED_IDS, comma-separated, each seeded at trust 1.0)
-	// and a shared secret for the dev voucher authenticator
-	// (SOCIAL_VOUCHING_SECRET). See src/methods/social-vouching/README.md.
-	if os.Getenv("SOCIAL_VOUCHING_ENABLED") != "" {
+	// involved; registration is opt-in via SOCIAL_VOUCHING_ENABLED (bootstrap
+	// seeds in SOCIAL_VOUCHING_SEED_IDS, comma-separated, each at trust 1.0;
+	// SOCIAL_VOUCHING_SECRET for the dev HMAC /vouch route), or implied by
+	// IN_PERSON_VOUCH_ENABLED, whose ceremony records vouches into the same
+	// graph and needs no secret (vouchers prove themselves with their own
+	// credential). See src/methods/social-vouching/README.md.
+	inPerson, err := inPersonOptionsFromEnv()
+	if err != nil {
+		return Dependencies{}, err
+	}
+	socialOn := os.Getenv("SOCIAL_VOUCHING_ENABLED") != ""
+	if socialOn || inPerson != nil {
 		secret := os.Getenv("SOCIAL_VOUCHING_SECRET")
-		if secret == "" {
+		if socialOn && secret == "" && inPerson == nil {
 			return Dependencies{}, fmt.Errorf("social-vouching-graph: SOCIAL_VOUCHING_ENABLED is set but SOCIAL_VOUCHING_SECRET is empty")
 		}
 		seeds := make(map[string]float64)
@@ -576,19 +616,26 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 				seeds[id] = 1.0
 			}
 		}
-		vouching := socialvouching.NewMethod(socialvouching.Config{
-			Store:         socialvouching.NewInMemoryGraphStore(seeds),
-			Authenticator: socialvouching.NewHMACDevAuthenticator(secret),
-		})
+		graph := socialvouching.NewInMemoryGraphStore(seeds)
+		var auth socialvouching.VoucherAuthenticator = socialvouching.RejectAllAuthenticator{}
+		devRoute := socialOn && secret != ""
+		if devRoute {
+			auth = socialvouching.NewHMACDevAuthenticator(secret)
+		}
+		vouching := socialvouching.NewMethod(socialvouching.Config{Store: graph, Authenticator: auth})
 		if err := reg.Register(vouching); err != nil {
 			return Dependencies{}, fmt.Errorf("register social-vouching-graph: %w", err)
 		}
-		deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
-			MethodID: socialvouching.MethodID,
-			Path:     "vouch",
-			Method:   http.MethodPost,
-			Handler:  vouching.VouchHandler(nil),
-		})
+		if devRoute {
+			deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
+				MethodID: socialvouching.MethodID,
+				Path:     "vouch",
+				Method:   http.MethodPost,
+				Handler:  vouching.VouchHandler(nil),
+			})
+		}
+		deps.VouchGraph = graph
+		deps.InPersonVouch = inPerson
 	}
 
 	return deps, nil
