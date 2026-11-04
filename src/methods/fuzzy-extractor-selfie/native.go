@@ -318,7 +318,7 @@ func (n *NativeMethod) CompleteCeremony(ctx context.Context, cc types.CeremonyCo
 		return fail(rep.Reason)
 	}
 
-	res, err := n.web.enroll(ctx, NativeMethodID, template)
+	res, err := n.web.enroll(ctx, cc.SessionID, NativeMethodID, template)
 	if err != nil {
 		return types.MethodResult{}, fmt.Errorf("fuzzy-extractor-selfie-native: %w", err)
 	}

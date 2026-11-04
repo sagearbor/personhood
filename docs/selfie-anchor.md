@@ -74,8 +74,14 @@ This counts as biometric data, for two reasons:
 If a duplicate got the existing commitment back, anyone holding a photo of
 you could obtain your nullifier binding and link your OpenLine activity to
 your face. Refusing leaks less: it only tells the caller "this face is
-enrolled". The cost is that a person who loses their device cannot re-enroll
-with the selfie anchor. Recovery has to go through another path.
+enrolled".
+
+With `NO_FALSE_LOCKOUT=1` ([08-no-false-lockout.md](08-no-false-lockout.md))
+the refusal is no longer a dead end. The response carries next steps: the
+same holder key is re-issued at once; "this might be you" starts a recovery
+that needs a second factor and a 72-hour cancel window; "not me" (a twin or
+a look-alike) continues with another anchor; or a manual review. The
+matched commitment still never reaches the client.
 
 ## Measured accuracy
 
@@ -125,7 +131,8 @@ half of the people, gave the same numbers (FNMR 3.9%, FMR 0.24%).
   model works at population scale. Even the best commercial face algorithms
   (NIST FRVT 1:N) are far from the FMR of about 1e-9 that deduplicating
   millions of people needs. Only iris systems get near that.
-- **Twins.** Identical twins will collide (the second twin is refused).
+- **Twins.** Identical twins will collide (the second twin is refused, or
+  with `NO_FALSE_LOCKOUT=1` routed to another anchor).
   Close relatives raise the false-match rate above the figure measured here
   on unrelated people.
 - **Demographics.** The London Set is small and mostly of European descent.
@@ -170,7 +177,7 @@ SELFIE_EVAL_TEMPLATES=$PWD/tmp/selfie-eval/templates.json \
 | **Replayed video** of the person doing challenges | Must match a random order of 3 of 4 challenges (24 orders) live, with the right timing. | Random order, 8 s windows, neutral pose between challenges. | An attacker with 24 recorded clips and a virtual camera could splice them. Unlikely, but possible. |
 | **Virtual-camera injection** (OBS, a rooted phone, an emulator) | The browser cannot tell a virtual camera from a real one. `getUserMedia` gives no provenance. | None in a browser. | **Not stopped.** |
 | **Real-time deepfake / face-swap puppeteering** through a virtual camera | Performs any challenge live. Lets one operator enroll many synthetic faces. | None. Parallax and blink checks are passed by good real-time 3D face swaps. | **Not stopped.** Combined with the scripted client, this is why the strength must stay low. |
-| **Twins / look-alikes** | Second person refused. | None. | Accepted, with an appeal path needed. |
+| **Twins / look-alikes** | Second person refused. | With `NO_FALSE_LOCKOUT=1`: routed to another anchor (K+2 vouchers, a document, or manual review); cannot take over the first identity. | More friction for the second person; at most `FACE_MATCH_MAX_OTHERS` per face. |
 | **Same person re-enrolling** with changed glasses, light or angle | Gets a second identity at the FNMR rate. | Averaging frames, a population-centred hash. | 4% in the studio, more in the field. |
 | **Issuer database leak** | Templates are recoverable, and linkable to any photo of the person. | Helper data only. No photos or descriptors are stored. | Treat it as biometric data. |
 | **Photo-holder learns enrollment status** | The refusal reveals "this face is enrolled". | Duplicates are refused rather than re-issued (see above). | Membership is revealed; the nullifier is not. |
@@ -363,11 +370,12 @@ The owner's assumptions are **confirmed**:
 
 **What the lead deploys first:**
 
-1. Deploy the issuer (test mode) with `SELFIE_ANCHOR=1` and
-   `FIRESTORE_PROJECT_ID` set, so enrolled faces survive restarts:
+1. Deploy the **test** issuer with `SELFIE_ANCHOR=1` and in-memory stores
+   (no `FIRESTORE_PROJECT_ID`: arborfam-hub's Firestore is the live
+   issuer's database). Enrolled faces last as long as the instance:
    ```bash
    PROJECT=arborfam-hub WEB_ORIGIN=<live origins>,<preview-channel-origin> \
-     FIRESTORE_PROJECT_ID=arborfam-hub SELFIE_ANCHOR=1 INVITE_CODE=... \
+     SELFIE_ANCHOR=1 INVITE_CODE=... \
      bash scripts/deploy-cloudrun.sh
    ```
    - Check that `GET /v1/methods` lists `fuzzy-extractor-selfie`, anchor,
@@ -423,10 +431,17 @@ SELFIE_NATIVE=1
 ANDROID_KEY_ATTESTATION_PACKAGE=org.openline.wallet
 ANDROID_KEY_ATTESTATION_SIGNER_SHA256=<signer cert SHA-256 printed by the APK build>
 ANDROID_KEY_ATTESTATION_REVOCATION=fail-open
-FIRESTORE_PROJECT_ID=arborfam-hub
 DEV_EXPOSE_CHALLENGE_SECRETS=1
 SELFIE_NATIVE_LOG_TRACES=1   # optional: log raw traces for calibration
 ```
+
+**No `FIRESTORE_PROJECT_ID` and no `REDIS_URL`:** in arborfam-hub that
+Firestore is the live issuer's database. The test issuer runs on in-memory
+stores (the native method needs nothing else; `TestNativeSelfie_InMemory_*`
+covers it), so enrolled faces are forgotten whenever the instance
+restarts. Run the re-enrol and duplicate tests within one instance's
+lifetime (or keep `--min-instances=1 --max-instances=1` on the test
+service).
 
 `GET /v1/methods` must list `fuzzy-extractor-selfie` (50) and
 `fuzzy-extractor-selfie-native` (55). Then build and install the wallet APK

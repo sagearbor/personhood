@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/sagearbor/personhood/pkg/types"
+
 	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
 	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
 )
@@ -52,4 +54,18 @@ func (a androidKeyAttester) VerifyAttestedKey(ctx context.Context, chain []strin
 		return nil, &fuzzyextractorselfie.AttestationError{Reason: "attestation_invalid"}
 	}
 	return certs[0].PublicKey, nil
+}
+
+// selfieCommitment is the face commitment from either selfie ceremony (web
+// or native): both enroll into one accumulator, so they are one identity.
+func selfieCommitment(verifiedMethods []types.VerifiedMethod) string {
+	if c := biometricCommitmentFromVerifiedMethods(verifiedMethods, fuzzyextractorselfie.MethodID); c != "" {
+		return c
+	}
+	return biometricCommitmentFromVerifiedMethods(verifiedMethods, fuzzyextractorselfie.NativeMethodID)
+}
+
+// isSelfieMethod reports whether id is the web or the native selfie method.
+func isSelfieMethod(id string) bool {
+	return id == fuzzyextractorselfie.MethodID || id == fuzzyextractorselfie.NativeMethodID
 }

@@ -60,6 +60,10 @@ type VoucherRecord struct {
 	// Revoked marks a DID that was itself proven a duplicate or a cheater.
 	// It can neither vouch nor be vouched for again.
 	Revoked bool
+	// PenalizedVouchers lists, on a revoked candidate's record, the
+	// vouchers its revocation gave a strike, so Reinstate can take exactly
+	// those strikes back.
+	PenalizedVouchers []string
 }
 
 // Errors CommitVouch returns.
@@ -101,6 +105,14 @@ type InPersonStore interface {
 	// candidate again is a no-op that returns (nil, nil), so a repeated
 	// report cannot stack strikes.
 	Penalize(ctx context.Context, candidateDID string, vouchers []string, now time.Time, suspendFor time.Duration) (map[string]int, error)
+
+	// Reinstate undoes Penalize after an operator found the candidate
+	// honest: the candidate is no longer revoked, and each voucher Penalize
+	// struck loses that strike (a voucher left with no strikes is no longer
+	// suspended; one with other strikes keeps its suspension). It returns
+	// the strike count each of those vouchers now has, or (nil, nil) when
+	// the candidate was not revoked.
+	Reinstate(ctx context.Context, candidateDID string) (map[string]int, error)
 }
 
 // InMemoryInPersonStore is a mutex-protected InPersonStore. Like every
@@ -235,12 +247,12 @@ func (s *InMemoryInPersonStore) Penalize(_ context.Context, candidateDID string,
 		return nil, nil
 	}
 	c.Revoked = true
-	s.vouchers[candidateDID] = c
 	strikes := make(map[string]int, len(vouchers))
 	for _, did := range vouchers {
 		if did == candidateDID {
 			continue
 		}
+		c.PenalizedVouchers = append(c.PenalizedVouchers, did)
 		r := s.vouchers[did]
 		r.Strikes++
 		until := now.Add(suspendFor * time.Duration(r.Strikes))
@@ -250,5 +262,30 @@ func (s *InMemoryInPersonStore) Penalize(_ context.Context, candidateDID string,
 		s.vouchers[did] = r
 		strikes[did] = r.Strikes
 	}
+	s.vouchers[candidateDID] = c
+	return strikes, nil
+}
+
+func (s *InMemoryInPersonStore) Reinstate(_ context.Context, candidateDID string) (map[string]int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.vouchers[candidateDID]
+	if !c.Revoked {
+		return nil, nil
+	}
+	strikes := make(map[string]int, len(c.PenalizedVouchers))
+	for _, did := range c.PenalizedVouchers {
+		r := s.vouchers[did]
+		if r.Strikes > 0 {
+			r.Strikes--
+		}
+		if r.Strikes == 0 {
+			r.SuspendedUntil = time.Time{}
+		}
+		s.vouchers[did] = r
+		strikes[did] = r.Strikes
+	}
+	c.Revoked, c.PenalizedVouchers = false, nil
+	s.vouchers[candidateDID] = c
 	return strikes, nil
 }

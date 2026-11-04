@@ -32,8 +32,12 @@ import (
 //	POST /v1/credentials/issue                 — issue the W3C VC
 //	GET  /v1/status-list/{listId}              — public revocation list
 //	POST /v1/revocations/equivocation          — HOLDER_REVOCATION_ENABLED: revoke a double-signer
+//	GET  /v1/admin/document-reviews            — DOCUMENT_CHIP_ANCHOR=1 + ADMIN_TOKEN
 //	POST /v1/admin/revoke-holder               — HOLDER_REVOCATION_ENABLED + ADMIN_TOKEN
 //	*    /v1/methods/in-person-vouch/{offer,accept,confirm,status} — IN_PERSON_VOUCH_ENABLED
+//	POST /v1/face-match/decline                — NO_FALSE_LOCKOUT: "not me" (twin / look-alike)
+//	*    /v1/recovery/...                      — NO_FALSE_LOCKOUT: move an identity to a new key
+//	*    /v1/reviews, /v1/appeals, /v1/admin/{reviews,reinstate} — NO_FALSE_LOCKOUT + ADMIN_TOKEN
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(requestLogger)
@@ -72,6 +76,23 @@ func (s *Server) Router() http.Handler {
 		r.Get("/status-list/{listId}", s.handleStatusList)
 		if s.cfg.AdminToken != "" {
 			r.Post("/admin/revoke", s.handleAdminRevoke)
+			r.Get("/admin/document-reviews", s.handleAdminDocumentReviews)
+		}
+		if s.lockout != nil {
+			r.Post("/face-match/decline", s.handleFaceMatchDecline)
+			r.Post("/recovery/start", s.handleRecoveryStart)
+			r.Get("/recovery/pending", s.handleRecoveryPending)
+			r.Get("/recovery/{id}", s.handleRecoveryGet)
+			r.Post("/recovery/{id}/cancel", s.handleRecoveryCancel)
+			r.Post("/recovery/{id}/complete", s.handleRecoveryComplete)
+			if s.reviewsEnabled() {
+				r.Post("/reviews", s.handleReviewRequest)
+				r.Get("/reviews/{id}", s.handleReviewGet)
+				r.Post("/appeals", s.handleAppeal)
+				r.Get("/admin/reviews", s.handleAdminReviews)
+				r.Post("/admin/reviews/{id}/decide", s.handleAdminDecide)
+				r.Post("/admin/reinstate", s.handleAdminReinstate)
+			}
 		}
 		if s.holders != nil {
 			// Public: an equivocation proof verifies itself.

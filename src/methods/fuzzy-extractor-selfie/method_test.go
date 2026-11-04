@@ -213,3 +213,25 @@ func TestNewMethod_PanicsOnNilAccumulator(t *testing.T) {
 	}()
 	NewMethod(Config{})
 }
+
+func TestMethod_CompleteCeremony_OnMatchNamesTheMatchedFace(t *testing.T) {
+	t.Parallel()
+	var gotSession string
+	var got Commitment
+	m := NewMethod(Config{Accumulator: NewInMemoryAccumulator(), OnMatch: func(_ context.Context, sessionID string, c Commitment) error {
+		gotSession, got = sessionID, c
+		return nil
+	}})
+	template := RandomTemplateForTesting()
+	first := completeWithTemplate(t, m, "sess-1", template)
+	if gotSession != "" {
+		t.Fatal("OnMatch called for a new face")
+	}
+	second := completeWithTemplate(t, m, "sess-2", NoisyTemplateForTesting(template, 5))
+	if second.Success || second.ErrorReason != ReasonDuplicate || second.AttestationDigest != "" {
+		t.Fatalf("duplicate result = %+v (the commitment must not reach the client)", second)
+	}
+	if gotSession != "sess-2" || got.Hex() != first.AttestationDigest {
+		t.Fatalf("OnMatch(%q, %s), want sess-2 and the first enrollment's commitment", gotSession, got.Hex())
+	}
+}

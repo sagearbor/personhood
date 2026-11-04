@@ -159,3 +159,26 @@ func (p *InPerson) anchorVouchers(ctx context.Context, candidate string) ([]stri
 	sort.Strings(out)
 	return out, nil
 }
+
+// AnchorVouchers returns the sorted DIDs of the vouchers whose in-person
+// vouch for candidate currently counts toward the anchor. The issuer uses
+// it to ask for more vouchers in harder cases (a face that matched someone
+// else's) and to check recovery vouchers.
+func (p *InPerson) AnchorVouchers(ctx context.Context, candidate string) ([]string, error) {
+	return p.anchorVouchers(ctx, candidate)
+}
+
+// VoucherDIDsFor returns every DID that confirmed an in-person vouch for
+// candidate, whatever its standing now.
+func (p *InPerson) VoucherDIDsFor(ctx context.Context, candidate string) ([]string, error) {
+	vouches, err := p.cfg.Store.VouchesFor(ctx, candidate)
+	if err != nil {
+		return nil, fmt.Errorf("social-vouching: vouches lookup: %w", err)
+	}
+	out := make([]string, 0, len(vouches))
+	for _, v := range vouches {
+		out = append(out, v.VoucherDID)
+	}
+	sort.Strings(out)
+	return out, nil
+}

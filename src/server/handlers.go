@@ -21,6 +21,7 @@ import (
 	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
 	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
 	ipasnmethod "github.com/sagearbor/personhood/src/methods/ip-asn-reputation"
+	socialvouching "github.com/sagearbor/personhood/src/methods/social-vouching"
 )
 
 // startEnrollmentRequest is the JSON body of POST /enrollment/start.
@@ -89,6 +90,9 @@ type completeMethodRequest struct {
 type completeMethodResponse struct {
 	Result  types.MethodResult `json:"result"`
 	Session SessionView        `json:"session"`
+	// FaceMatch is set (NO_FALSE_LOCKOUT) when a selfie matched an enrolled
+	// face: the ways forward instead of a dead end.
+	FaceMatch *faceMatchRouting `json:"face_match,omitempty"`
 }
 
 // serverConfigResponse is the JSON body of GET /v1/config — the public,
@@ -135,6 +139,13 @@ type serverConfigResponse struct {
 	// mounted (IN_PERSON_VOUCH_ENABLED). The web app shows "Vouch for
 	// someone" only then.
 	InPersonVouch bool `json:"in_person_vouch"`
+
+	// NoFalseLockout reports whether face matches are routed and identity
+	// recovery is on (NO_FALSE_LOCKOUT); ManualReview whether the review
+	// queue and appeals are mounted; RecoveryDelaySeconds the cancel window.
+	NoFalseLockout       bool  `json:"no_false_lockout"`
+	ManualReview         bool  `json:"manual_review"`
+	RecoveryDelaySeconds int64 `json:"recovery_delay_seconds,omitempty"`
 }
 
 // issueCredentialRequest is the JSON body of POST /v1/credentials/issue.
@@ -175,6 +186,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		HolderPoPRequired:       s.cfg.RequireHolderPoP,
 		HolderRevocation:        s.holders != nil,
 		InPersonVouch:           s.inPerson != nil,
+		NoFalseLockout:          s.lockout != nil,
+		ManualReview:            s.reviewsEnabled(),
+		RecoveryDelaySeconds:    recoveryDelaySeconds(s),
 	})
 }
 
@@ -249,14 +263,14 @@ func (s *Server) handleBeginMethod(w http.ResponseWriter, r *http.Request) {
 	// canonical form (a phone number without its country code) is refused
 	// before anything is sent: it could be enrolled again under another
 	// spelling as a different person.
-	if kind := identifierKindForMethod(methodID); kind != "" && s.identifierKeys != nil {
+	if kind := identifierKindForMethod(methodID); identifierFromUserInput(kind) && s.identifierKeys != nil {
 		if _, err := normalizeIdentifier(kind, req.UserInput); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_identifier", err.Error())
 			return
 		}
 	}
 
-	if kind := identifierKindForMethod(methodID); kind != "" && s.identifierSends != nil {
+	if kind := identifierKindForMethod(methodID); identifierFromUserInput(kind) && s.identifierSends != nil {
 		if ok, wait := s.identifierSends.allow(s.identifierSendKey(kind, req.UserInput), s.nowFunc()); !ok {
 			secs := int(math.Ceil(wait.Seconds()))
 			if secs < 1 {
@@ -352,7 +366,18 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 	// A method with prerequisites (the in-person-vouch anchor needs a
 	// selfie dedupe first, see inperson.go) is not run until the session
 	// holds one of them.
-	if need := s.missingPrerequisite(methodID, sess); need != nil {
+	need := s.missingPrerequisite(methodID, sess)
+	if need != nil && s.lockout != nil && contains(need, fuzzyextractorselfie.MethodID) {
+		// A selfie that matched someone else's face, declined as "not me",
+		// is a dedupe that ran: the person continues with another anchor.
+		if _, declined, err := s.faceMatchDeclined(r.Context(), sess.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "store_failed", err.Error())
+			return
+		} else if declined {
+			need = nil
+		}
+	}
+	if need != nil {
 		writeJSON(w, http.StatusOK, completeMethodResponse{
 			Result:  types.MethodResult{Success: false, MethodID: methodID, ErrorReason: "prerequisite_missing:" + strings.Join(need, "|")},
 			Session: sess,
@@ -391,6 +416,35 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 	if methodID == appattestmethod.MethodID {
 		log.Printf("app-attest-device: success=%t reason=%q", result.Success, result.ErrorReason)
 	}
+	var routing *faceMatchRouting
+	if s.lockout != nil {
+		switch {
+		// The web and the native selfie share one accumulator, so a face
+		// match from either gets the same routing (recover / not me /
+		// review).
+		case isSelfieMethod(methodID) && !result.Success && result.ErrorReason == fuzzyextractorselfie.ReasonDuplicate:
+			res, rt, err := s.routeFaceMatch(ctx, sess, method.Metadata())
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "face_match_failed", err.Error())
+				return
+			}
+			if res.Success {
+				view, _ := s.sessions.Get(sess.ID)
+				writeJSON(w, http.StatusOK, completeMethodResponse{Result: res, Session: view})
+				return
+			}
+			routing = rt
+		case methodID == socialvouching.InPersonMethodID && result.Success:
+			reason, err := s.checkDeclinedVouches(ctx, sess)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "complete_failed", err.Error())
+				return
+			}
+			if reason != "" {
+				result = types.MethodResult{Success: false, MethodID: methodID, ErrorReason: reason}
+			}
+		}
+	}
 	if result.Success {
 		if recErr := s.recordVerified(sess.ID, methodID, result, method.Metadata()); recErr != nil {
 			writeError(w, http.StatusInternalServerError, "record_failed", recErr.Error())
@@ -398,7 +452,14 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	view, _ := s.sessions.Get(sess.ID)
-	writeJSON(w, http.StatusOK, completeMethodResponse{Result: result, Session: view})
+	writeJSON(w, http.StatusOK, completeMethodResponse{Result: result, Session: view, FaceMatch: routing})
+}
+
+func recoveryDelaySeconds(s *Server) int64 {
+	if s.lockout == nil {
+		return 0
+	}
+	return int64(s.cfg.Lockout.RecoveryDelay / time.Second)
 }
 
 // handleEmailMagicLink is the GET /v1/methods/email/verify endpoint every
@@ -514,11 +575,7 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	// verified an email or phone, the binding comes from that identifier's
 	// seed, so the same inbox always gets the same binding no matter how
 	// many device keys it enrolls with (identifier.go).
-	bio := biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.MethodID)
-	if bio == "" {
-		// The native ceremony enrolls into the same accumulator.
-		bio = biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.NativeMethodID)
-	}
+	bio := selfieCommitment(view.VerifiedMethods)
 	if bio == "" && s.identifierKeys != nil {
 		for _, vm := range view.VerifiedMethods {
 			if kind := identifierKindForMethod(vm.MethodID); kind != "" && view.IdentifierKeys[kind] == "" {
@@ -559,7 +616,18 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if apiErr != nil {
-			writeError(w, http.StatusForbidden, apiErr.code, apiErr.message)
+			writeErrorNext(w, http.StatusForbidden, apiErr.code, apiErr.message, s.appealStepIfLockout(), nil)
+			return
+		}
+	}
+	if s.lockout != nil {
+		status, code, msg, next, err := s.lockoutIssuanceCheck(r.Context(), view)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "issuance_check_failed", err.Error())
+			return
+		}
+		if status != 0 {
+			writeErrorNext(w, status, code, msg, next, nil)
 			return
 		}
 	}
@@ -586,6 +654,12 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	if s.holders != nil {
 		rec := IssuanceRecord{CredentialID: cred.ID, NullifierCommitments: seedCommitments, IssuedAt: issuedAt}
 		if err := s.holders.RecordIssuance(r.Context(), view.HolderDID, rec); err != nil {
+			writeError(w, http.StatusInternalServerError, "issuance_record_failed", err.Error())
+			return
+		}
+	}
+	if s.lockout != nil {
+		if err := s.lockoutRecordIssuance(r.Context(), view, seedCommitments); err != nil {
 			writeError(w, http.StatusInternalServerError, "issuance_record_failed", err.Error())
 			return
 		}

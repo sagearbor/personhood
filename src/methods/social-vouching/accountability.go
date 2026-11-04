@@ -88,3 +88,37 @@ func (p *InPerson) Penalize(ctx context.Context, candidateDID string) (PenaltyRe
 	}
 	return report, nil
 }
+
+// Reinstate undoes Penalize for a candidate an operator found honest (for
+// example a double-sign caused by a wallet bug): the candidate may vouch and
+// be vouched for again, and the strikes its revocation gave its vouchers
+// are taken back, with their graph trust restored by the same factor.
+// The candidate's own graph entry is not restored; it re-enters the graph
+// when it enrolls again. Idempotent: a candidate that is not revoked is
+// left alone.
+func (p *InPerson) Reinstate(ctx context.Context, candidateDID string) (PenaltyReport, error) {
+	strikes, err := p.cfg.Store.Reinstate(ctx, candidateDID)
+	if err != nil {
+		return PenaltyReport{}, fmt.Errorf("social-vouching: reinstate: %w", err)
+	}
+	report := PenaltyReport{CandidateDID: candidateDID, AlreadyRevoked: strikes == nil, Vouchers: strikes}
+	if strikes == nil {
+		report.Vouchers = map[string]int{}
+		return report, nil
+	}
+	for did := range strikes {
+		trust, known, err := p.cfg.Graph.TrustOf(ctx, did)
+		if err != nil {
+			return report, fmt.Errorf("social-vouching: reinstate: %w", err)
+		}
+		if known && p.cfg.PenaltyFactor > 0 {
+			if trust = trust / p.cfg.PenaltyFactor; trust > 1 {
+				trust = 1
+			}
+			if err := p.cfg.Graph.Enroll(ctx, did, trust); err != nil {
+				return report, fmt.Errorf("social-vouching: reinstate: %w", err)
+			}
+		}
+	}
+	return report, nil
+}

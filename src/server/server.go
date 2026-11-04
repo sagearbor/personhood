@@ -16,6 +16,7 @@ import (
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
 	captchamethod "github.com/sagearbor/personhood/src/methods/captcha-turnstile"
+	documentchip "github.com/sagearbor/personhood/src/methods/document-chip"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	emailtiermethod "github.com/sagearbor/personhood/src/methods/email-tier"
 	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
@@ -70,10 +71,18 @@ type Server struct {
 	// IN_PERSON_VOUCH_ENABLED. revokeHolder penalizes vouchers through it.
 	inPerson *socialvouching.InPerson
 
+	// documentReviews lists dual-document review cases (documentanchor.go);
+	// nil unless DOCUMENT_CHIP_ANCHOR=1.
+	documentReviews documentchip.ReviewQueue
+
 	// methodPrerequisites maps a method id to methods the session must
 	// already hold (any one of them) before it may complete. Set by the
 	// in-person-vouch anchor policy.
 	methodPrerequisites map[string][]string
+
+	// lockout holds the no-false-lockout records (nolockout.go); nil
+	// unless Config.NoFalseLockout.
+	lockout *lockoutStore
 
 	// methodRoutes carries additional HTTP handlers a method plugin needs
 	// the server to host (e.g. third-party webhook receivers). Populated by
@@ -140,6 +149,15 @@ type Dependencies struct {
 
 	// InPersonVouch turns on in-person vouching (inperson.go); nil = off.
 	InPersonVouch *InPersonVouchOptions
+
+	// DocumentAnchor connects the document methods (documentanchor.go) to
+	// the server's identifier store; nil = off.
+	DocumentAnchor *documentAnchorDeps
+
+	// SelfieMatches relays the selfie method's face matches to the server
+	// (NoFalseLockout routing). BuildDependencies sets it whenever it
+	// registers the selfie method; nil means matches are not routed.
+	SelfieMatches *SelfieMatchRelay
 }
 
 // NewServer constructs a Server from cfg and deps. It returns an error if cfg
@@ -233,6 +251,16 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 	}
 	if deps.InPersonVouch != nil {
 		if err := s.wireInPersonVouch(deps.InPersonVouch, deps.VouchGraph); err != nil {
+			return nil, err
+		}
+	}
+	if deps.DocumentAnchor != nil {
+		if err := s.wireDocumentAnchor(deps.DocumentAnchor); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.NoFalseLockout {
+		if err := s.wireNoFalseLockout(deps.SelfieMatches); err != nil {
 			return nil, err
 		}
 	}
@@ -456,6 +484,22 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		}
 	}
 
+	// document-chip + document-signed-qr: government documents signed by
+	// the issuing state, no vendor. DOCUMENT_CHIP_ANCHOR=1; see
+	// documentanchor.go and docs/document-chip-anchor.md.
+	chip, signedQR, docDeps, err := documentAnchorFromEnv()
+	if err != nil {
+		return Dependencies{}, fmt.Errorf("document anchor: %w", err)
+	}
+	if chip != nil {
+		if err := reg.Register(chip); err != nil {
+			return Dependencies{}, fmt.Errorf("register document-chip: %w", err)
+		}
+		if err := reg.Register(signedQR); err != nil {
+			return Dependencies{}, fmt.Errorf("register document-signed-qr: %w", err)
+		}
+	}
+
 	// paid-billing-card (checklist #9): the strongest single supplementary
 	// (strength 35) — a $0 Stripe SetupIntent with 3DS/SCA. Registered when
 	// STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET are set; STRIPE_PUBLISHABLE_KEY
@@ -574,11 +618,14 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		if _, err := rand.Read(key); err != nil {
 			return Dependencies{}, fmt.Errorf("fuzzy-extractor-selfie: liveness key: %w", err)
 		}
+		relay := &SelfieMatchRelay{}
 		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{
 			Accumulator: acc,
 			Liveness:    &fuzzyextractorselfie.LivenessConfig{Key: key},
 			Strength:    SelfieAnchorStrength,
+			OnMatch:     relay.OnMatch,
 		})
+		deps.SelfieMatches = relay
 		if err := reg.Register(fuzzy); err != nil {
 			return Dependencies{}, fmt.Errorf("register fuzzy-extractor-selfie: %w", err)
 		}
@@ -598,9 +645,12 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 	} else if os.Getenv("SELFIE_NATIVE") == "1" {
 		return Dependencies{}, fmt.Errorf("SELFIE_NATIVE=1 needs SELFIE_ANCHOR=1")
 	} else if os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
+		relay := &SelfieMatchRelay{}
 		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{
 			Accumulator: fuzzyextractorselfie.NewInMemoryAccumulator(),
+			OnMatch:     relay.OnMatch,
 		})
+		deps.SelfieMatches = relay
 		if err := reg.Register(fuzzy); err != nil {
 			return Dependencies{}, fmt.Errorf("register fuzzy-extractor-selfie: %w", err)
 		}
@@ -652,6 +702,7 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		deps.VouchGraph = graph
 		deps.InPersonVouch = inPerson
 	}
+	deps.DocumentAnchor = docDeps
 
 	return deps, nil
 }

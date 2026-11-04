@@ -5,7 +5,9 @@ import { Button } from '../Button';
 import { Card } from '../Card';
 import type { Status } from '../StatusPill';
 import { friendlyError, isSessionExpired } from '@/lib/errors';
-import { beginMethod, completeMethod, type StartEnrollmentResponse } from '@/lib/api';
+import { beginMethod, completeMethod, type FaceMatchRouting, type StartEnrollmentResponse } from '@/lib/api';
+import { FaceMatchPanel } from '../FaceMatchPanel';
+import { recalledRecovery } from '@/lib/lockout';
 import { descriptorDistance, loadFaceEngine, type FaceEngine } from '@/lib/face/engine';
 import {
   FAIL_MESSAGES,
@@ -30,7 +32,7 @@ const SAME_FACE_MAX = 0.45;
 /** Least time between two descriptor computations. */
 const DESCRIPTOR_INTERVAL_MS = 250;
 
-type Phase = 'idle' | 'loading' | 'running' | 'submitting' | 'done' | 'error' | 'unavailable';
+type Phase = 'idle' | 'loading' | 'running' | 'submitting' | 'done' | 'error' | 'unavailable' | 'matched';
 
 const SERVER_REASONS: Record<string, string> = {
   duplicate_person_detected:
@@ -83,6 +85,10 @@ export function SelfieStep({
   const [arrow, setArrow] = useState<'left' | 'right' | null>(null);
   const [passFlash, setPassFlash] = useState(0);
   const cuesRef = useRef<CuePlayer | null>(null);
+  // NO_FALSE_LOCKOUT: the face matched someone enrolled; the issuer's ways forward.
+  const [routing, setRouting] = useState<FaceMatchRouting | null>(null);
+  // A recovery this phone (holder key) started in an earlier session.
+  const [resume, setResume] = useState<{ id: string; executes_at: string } | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number>(0);
@@ -101,6 +107,16 @@ export function SelfieStep({
   }
 
   useEffect(() => stopCamera, []);
+
+  useEffect(() => {
+    if (done || !available) return;
+    const r = recalledRecovery(session.holder_did);
+    if (r) {
+      setResume(r);
+      setPhase('matched');
+      setStatusText('recovery waiting');
+    }
+  }, [done, available, session.holder_did]);
 
   function fail(message: string, label = 'failed') {
     stopCamera();
@@ -251,7 +267,7 @@ export function SelfieStep({
     setPhase('submitting');
     setStatusText('enrolling');
     try {
-      const { result } = await completeMethod(METHOD_ID, session.session_id, {
+      const { result, face_match } = await completeMethod(METHOD_ID, session.session_id, {
         type: 'fuzzy-extractor-response',
         payload: {
           template_b64: bytesToBase64(template),
@@ -263,6 +279,12 @@ export function SelfieStep({
         setPhase('done');
         setStatusText('verified');
         onVerified();
+        return;
+      }
+      if (face_match) {
+        setRouting(face_match);
+        setPhase('matched');
+        setStatusText('looks enrolled');
         return;
       }
       fail(SERVER_REASONS[result.error_reason ?? ''] ?? result.error_reason ?? 'The issuer rejected this capture.', 'rejected');
@@ -314,6 +336,20 @@ export function SelfieStep({
             </Button>
           </div>
         </>
+      )}
+
+      {phase === 'matched' && (
+        <FaceMatchPanel
+          session={session}
+          routing={routing}
+          resume={resume}
+          onRecovered={() => {
+            setPhase('done');
+            setStatusText('recovered');
+            onVerified();
+          }}
+          onDeclined={onSkip}
+        />
       )}
 
       {phase === 'loading' && <p className="prose">Loading the face model and camera…</p>}

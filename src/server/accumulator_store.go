@@ -102,6 +102,16 @@ func NewSelfieAccumulatorFromEnv() (acc fuzzyextractorselfie.Accumulator, durabl
 // commitment hex.
 type FirestoreSelfieAccumulator struct {
 	client *firestoreclient.Client
+	// collection defaults to the selfie anchor's; the document anchor
+	// keeps its face index in its own collection.
+	collection string
+}
+
+func (a *FirestoreSelfieAccumulator) coll() string {
+	if a.collection != "" {
+		return a.collection
+	}
+	return firestoreSelfieCollection
 }
 
 func NewFirestoreSelfieAccumulator(client *firestoreclient.Client) *FirestoreSelfieAccumulator {
@@ -109,7 +119,7 @@ func NewFirestoreSelfieAccumulator(client *firestoreclient.Client) *FirestoreSel
 }
 
 func (a *FirestoreSelfieAccumulator) all(ctx context.Context) ([]fuzzyextractorselfie.EnrollmentRecord, error) {
-	docs, err := a.client.List(ctx, firestoreSelfieCollection)
+	docs, err := a.client.List(ctx, a.coll())
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +147,7 @@ func (a *FirestoreSelfieAccumulator) Add(ctx context.Context, rec fuzzyextractor
 	if err != nil {
 		return err
 	}
-	created, err := a.client.Create(ctx, firestoreSelfieCollection, rec.Commitment.Hex(), b)
+	created, err := a.client.Create(ctx, a.coll(), rec.Commitment.Hex(), b)
 	if err != nil {
 		return err
 	}
@@ -150,7 +160,7 @@ func (a *FirestoreSelfieAccumulator) Add(ctx context.Context, rec fuzzyextractor
 }
 
 func (a *FirestoreSelfieAccumulator) Count(ctx context.Context) (int, error) {
-	docs, err := a.client.List(ctx, firestoreSelfieCollection)
+	docs, err := a.client.List(ctx, a.coll())
 	return len(docs), err
 }
 
@@ -158,6 +168,15 @@ func (a *FirestoreSelfieAccumulator) Count(ctx context.Context) (int, error) {
 // LRANGE). Only as durable as the Redis server's persistence.
 type RedisSelfieAccumulator struct {
 	client *redisclient.Client
+	// listKey defaults to the selfie anchor's (see FirestoreSelfieAccumulator.collection).
+	listKey string
+}
+
+func (a *RedisSelfieAccumulator) key() string {
+	if a.listKey != "" {
+		return a.listKey
+	}
+	return redisSelfieListKey
 }
 
 func NewRedisSelfieAccumulator(client *redisclient.Client) *RedisSelfieAccumulator {
@@ -165,7 +184,7 @@ func NewRedisSelfieAccumulator(client *redisclient.Client) *RedisSelfieAccumulat
 }
 
 func (a *RedisSelfieAccumulator) FindDuplicate(ctx context.Context, template []byte) (fuzzyextractorselfie.EnrollmentRecord, bool, error) {
-	reply, err := a.client.Do(ctx, "LRANGE", redisSelfieListKey, "0", "-1")
+	reply, err := a.client.Do(ctx, "LRANGE", a.key(), "0", "-1")
 	if err != nil {
 		return fuzzyextractorselfie.EnrollmentRecord{}, false, fmt.Errorf("server: selfie LRANGE: %w", err)
 	}
@@ -185,14 +204,14 @@ func (a *RedisSelfieAccumulator) Add(ctx context.Context, rec fuzzyextractorself
 	if err != nil {
 		return err
 	}
-	if _, err := a.client.Do(ctx, "RPUSH", redisSelfieListKey, string(b)); err != nil {
+	if _, err := a.client.Do(ctx, "RPUSH", a.key(), string(b)); err != nil {
 		return fmt.Errorf("server: selfie RPUSH: %w", err)
 	}
 	return nil
 }
 
 func (a *RedisSelfieAccumulator) Count(ctx context.Context) (int, error) {
-	reply, err := a.client.Do(ctx, "LLEN", redisSelfieListKey)
+	reply, err := a.client.Do(ctx, "LLEN", a.key())
 	if err != nil {
 		return 0, err
 	}

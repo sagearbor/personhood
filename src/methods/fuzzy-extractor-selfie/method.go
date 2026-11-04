@@ -94,6 +94,10 @@ const (
 	// MethodFreshnessLifetime mirrors the other anchors (government-id-
 	// liveness, plaid-bank-link): 180 days.
 	MethodFreshnessLifetime = 180 * 24 * time.Hour
+
+	// ReasonDuplicate is the ErrorReason for a template that matches an
+	// enrolled face.
+	ReasonDuplicate = "duplicate_person_detected"
 )
 
 // Method implements the Personhood fuzzy-extractor-selfie anchor method.
@@ -102,6 +106,7 @@ type Method struct {
 	accumulator Accumulator
 	liveness    *LivenessConfig
 	strength    int
+	onMatch     MatchFunc
 
 	// enrollMu serializes the FindDuplicate-then-Add pair, so two
 	// enrollments of one face racing in this process cannot both pass the
@@ -123,7 +128,19 @@ type Config struct {
 	// Strength overrides MethodStrength on the method's metadata (and so on
 	// every credential it anchors). Zero means MethodStrength.
 	Strength int
+
+	// OnMatch, when set, is told which enrolled commitment a refused
+	// template matched, so the issuer can route the person (recover their
+	// own identity, or continue with another anchor) instead of leaving
+	// them at a dead end. The result returned to the client is unchanged
+	// (duplicate_person_detected); the commitment itself never leaves the
+	// issuer. An error from OnMatch fails the ceremony as a system error.
+	OnMatch MatchFunc
 }
+
+// MatchFunc receives the session and the commitment of the enrolled face a
+// new template matched. See Config.OnMatch.
+type MatchFunc func(ctx context.Context, sessionID string, matched Commitment) error
 
 // NewMethod constructs a Method. A nil Accumulator or an invalid
 // LivenessConfig is a programmer error and panics.
@@ -131,7 +148,7 @@ func NewMethod(cfg Config) *Method {
 	if cfg.Accumulator == nil {
 		panic("fuzzy-extractor-selfie.NewMethod: Accumulator must not be nil")
 	}
-	m := &Method{accumulator: cfg.Accumulator, strength: cfg.Strength}
+	m := &Method{accumulator: cfg.Accumulator, strength: cfg.Strength, onMatch: cfg.OnMatch}
 	if m.strength == 0 {
 		m.strength = MethodStrength
 	}
@@ -226,7 +243,7 @@ func (m *Method) CompleteCeremony(ctx context.Context, cc types.CeremonyContext,
 			return types.MethodResult{Success: false, MethodID: MethodID, ErrorReason: reason}, nil
 		}
 	}
-	return m.enroll(ctx, MethodID, template)
+	return m.enroll(ctx, cc.SessionID, MethodID, template)
 }
 
 // decodeTemplate reads template_b64 from a complete payload; the string is
@@ -249,13 +266,18 @@ func decodeTemplate(payload map[string]any) ([]byte, string) {
 // enroll runs the duplicate check and, for a new face, stores it. methodID
 // names the method on the result (the web or the native ceremony); both
 // share this Method's accumulator and lock, so they are one dedupe system.
-func (m *Method) enroll(ctx context.Context, methodID string, template []byte) (types.MethodResult, error) {
+func (m *Method) enroll(ctx context.Context, sessionID, methodID string, template []byte) (types.MethodResult, error) {
 	m.enrollMu.Lock()
 	defer m.enrollMu.Unlock()
-	if _, found, err := m.accumulator.FindDuplicate(ctx, template); err != nil {
+	if rec, found, err := m.accumulator.FindDuplicate(ctx, template); err != nil {
 		return types.MethodResult{}, fmt.Errorf("fuzzy-extractor-selfie: accumulator lookup: %w", err)
 	} else if found {
-		return types.MethodResult{Success: false, MethodID: methodID, ErrorReason: "duplicate_person_detected"}, nil
+		if m.onMatch != nil {
+			if err := m.onMatch(ctx, sessionID, rec.Commitment); err != nil {
+				return types.MethodResult{}, fmt.Errorf("fuzzy-extractor-selfie: on match: %w", err)
+			}
+		}
+		return types.MethodResult{Success: false, MethodID: methodID, ErrorReason: ReasonDuplicate}, nil
 	}
 
 	helper, commitment, err := Gen(template)
