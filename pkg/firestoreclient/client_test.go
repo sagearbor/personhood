@@ -2,6 +2,7 @@ package firestoreclient
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -144,5 +145,39 @@ func TestIntegration_CreateRefusesExisting(t *testing.T) {
 	got, found, err := c.Get(ctx, "test-coll", id)
 	if err != nil || !found || string(got) != "first" {
 		t.Fatalf("Get after Create: %q found=%v err=%v, want \"first\"", got, found, err)
+	}
+}
+
+func TestIntegration_ListPaginates(t *testing.T) {
+	c := testClient(t)
+	ctx := context.Background()
+	coll := "list-" + uniqueID(t)
+	const n = 305 // more than one page of 300
+	for i := 0; i < n; i++ {
+		if _, err := c.Create(ctx, coll, fmt.Sprintf("doc-%03d", i), []byte(fmt.Sprintf("v%d", i))); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+	if err := c.Set(ctx, coll, "expired", []byte("x"), time.Nanosecond); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	docs, err := c.List(ctx, coll)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(docs) != n {
+		t.Fatalf("List returned %d docs, want %d (expired one excluded)", len(docs), n)
+	}
+	seen := map[string]string{}
+	for _, d := range docs {
+		seen[d.ID] = string(d.Data)
+	}
+	if seen["doc-007"] != "v7" || seen["doc-304"] != "v304" {
+		t.Fatalf("List lost ids or data: doc-007=%q doc-304=%q", seen["doc-007"], seen["doc-304"])
+	}
+	empty, err := c.List(ctx, coll+"-none")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("List of empty collection = %v, %v", empty, err)
 	}
 }

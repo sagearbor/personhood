@@ -151,7 +151,7 @@ export default function Page() {
 
   const idAvailable = !!session?.available_methods.some((m) => m.id === 'government-id-liveness');
   // fuzzy-extractor-selfie only appears in available_methods when the
-  // issuer was started with FUZZY_EXTRACTOR_ENABLED=1 (see
+  // issuer was started with SELFIE_ANCHOR=1 or FUZZY_EXTRACTOR_ENABLED=1 (see
   // src/server/server.go's BuildDependencies) — that env var IS the "flag"
   // this step is gated by; available_methods is simply how its effect is
   // exposed to the client, the same pattern IdStep already uses for
