@@ -252,3 +252,64 @@ describe('frameSignal', () => {
     expect(frameSignal(5, [], undefined, 640, 480).faces).toBe(0);
   });
 });
+
+describe('glasses (blink score raised by lenses)', () => {
+  // Glasses: eyeBlink reads ~0.42 with the eyes open. Fixed thresholds
+  // (open < 0.3) never saw "eyes open", so the ceremony timed out.
+  const withGlasses = (t: number, opts: Partial<FrameSignal> & { turn?: number } = {}) =>
+    frame(t, { blink: 0.42, ...opts });
+
+  function run(open: number, closed: number) {
+    const c = new LivenessCeremony(['blink', 'turn_left', 'closer']);
+    let t = 0;
+    for (let i = 0; i < 12; i++) c.onFrame(withGlasses((t += 33), { blink: open }));
+    for (let i = 0; i < FRONTAL_FRAMES_EACH; i++) {
+      const f = withGlasses((t += 300), { blink: open });
+      c.onFrame(f);
+      if (!c.wantsFrontalFrame(f)) return c;
+      c.addFrontalFrame(t);
+    }
+    for (let w = 0; w < 600; w += 33) c.onFrame(withGlasses((t += 33), { blink: open }));
+    c.onFrame(withGlasses((t += 33), { blink: closed }));
+    c.onFrame(withGlasses((t += 120), { blink: closed }));
+    c.onFrame(withGlasses((t += 33), { blink: open }));
+    return c;
+  }
+
+  it('learns the open-eye score and still sees the blink', () => {
+    const c = run(0.42, 0.88);
+    expect(c.blinkBaseline).toBeCloseTo(0.42);
+    expect(c.results.map((r) => r.kind)).toEqual(['blink']);
+  });
+
+  it('leaves the thresholds unchanged without glasses', () => {
+    const c = new LivenessCeremony(['blink', 'closer', 'turn_left']);
+    for (let i = 0; i < 12; i++) c.onFrame(frame(i * 33));
+    expect(c.blinkOpen()).toBe(0.3);
+    expect(c.blinkClosed()).toBe(0.5);
+  });
+
+  it('says why when the blink is never seen', () => {
+    const c = run(0.42, 0.5); // the "blink" never rises clearly above the open score
+    for (let t = 20000; c.phase.kind === 'challenge' && t < 40000; t += 33) c.onFrame(withGlasses(t));
+    expect(c.phase).toEqual({ kind: 'failed', reason: 'blink_not_seen' });
+  });
+});
+
+describe('cues', () => {
+  it('speaks each prompt, marks start and pass, and asks to look back after a turn', async () => {
+    const { cuesFor, arrowFor } = await import('./cues');
+    const ch = { kind: 'challenge', index: 0, challenge: 'turn_left', promptAt: 0 } as const;
+    const start = cuesFor({ kind: 'frontal', which: 'start' }, ch);
+    expect(start).toEqual([{ say: 'Turn your head to your left.', tone: 'start', vibrate: [90] }]);
+    expect(cuesFor(ch, ch)).toEqual([]);
+    const next = { kind: 'challenge', index: 1, challenge: 'blink', promptAt: 1 } as const;
+    const passed = cuesFor(ch, next, 'turn_left');
+    expect(passed[0]).toMatchObject({ say: 'Good. Look back at the screen.', tone: 'pass' });
+    expect(passed[1]).toMatchObject({ say: 'Blink.', tone: 'start' });
+    expect(arrowFor(ch)).toBe('left');
+    expect(arrowFor({ ...ch, challenge: 'turn_right' })).toBe('right');
+    expect(arrowFor(next)).toBeNull();
+    expect(cuesFor(next, { kind: 'done' })[0]).toMatchObject({ tone: 'done' });
+  });
+});

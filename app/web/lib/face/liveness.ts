@@ -48,6 +48,24 @@ export const YAW_NEUTRAL = 0.07;
 export const YAW_TURNED = 0.16;
 export const BLINK_CLOSED = 0.5;
 export const BLINK_OPEN = 0.3;
+/**
+ * Glasses. MediaPipe's eyeBlink blendshape reads higher than usual through
+ * glasses (frames and lens glare cover part of the eye), often 0.3-0.5 with
+ * the eyes wide open. With fixed thresholds such a face never counts as
+ * "eyes open", so no frontal frame is taken and no challenge starts: the
+ * ceremony times out at the first step, which is how glasses failed on the
+ * Pixel 10 test. So the thresholds follow the person's own open-eye score
+ * (BLINK_BASELINE_FRAMES frontal frames, a low percentile so a blink in
+ * them does not count): open means below baseline + BLINK_OPEN_MARGIN,
+ * closed means above baseline + BLINK_CLOSED_MARGIN, never below the fixed
+ * values above. Without glasses the baseline is near 0 and nothing changes.
+ */
+export const BLINK_BASELINE_FRAMES = 12;
+export const BLINK_OPEN_MARGIN = 0.15;
+export const BLINK_CLOSED_MARGIN = 0.3;
+/** Above this the score cannot separate open from closed eyes. */
+export const BLINK_OPEN_CAP = 0.7;
+export const BLINK_CLOSED_CAP = 0.95;
 export const BLINK_MAX_CLOSED_MS = 1500;
 export const CLOSER_RATIO = 1.25;
 /** Minimum face width (fraction of frame width) to use a frame. */
@@ -182,12 +200,14 @@ export type Phase =
   | { kind: 'done' }
   | { kind: 'failed'; reason: FailReason };
 
-export type FailReason = 'no_face' | 'multiple_faces' | 'timeout' | 'too_fast' | 'flat_face';
+export type FailReason = 'no_face' | 'multiple_faces' | 'timeout' | 'blink_not_seen' | 'too_fast' | 'flat_face';
 
 export const FAIL_MESSAGES: Record<FailReason, string> = {
   no_face: 'We lost your face. Keep it in the frame, in good light.',
   multiple_faces: 'More than one face is in view. Only you should be in the frame.',
   timeout: 'That took too long. Try again and follow each prompt as it appears.',
+  blink_not_seen:
+    'The blink was not seen. Glasses are fine, but glare on the lenses can hide your eyes: try facing away from the light, or take your glasses off just for the blink.',
   too_fast: 'That was faster than anyone can react. Wait for each prompt, then do it.',
   flat_face: 'Your head turn did not look like a real 3D face. Try again, turning your head (not the phone).',
 };
@@ -211,6 +231,9 @@ export class LivenessCeremony {
   private neutralPts: Pt[] | null = null;
   private baselineSize = 0;
   private closedAt = -1;
+  private blinkSamples: number[] = [];
+  /** The person's open-eye blink score (see BLINK_BASELINE_FRAMES). */
+  blinkBaseline = 0;
 
   constructor(challenges: readonly ChallengeKind[]) {
     // An empty list is the legacy issuer (FUZZY_EXTRACTOR_ENABLED): frontal
@@ -221,7 +244,7 @@ export class LivenessCeremony {
 
   /** True when the current frame is a good frontal frame to take a descriptor from. */
   wantsFrontalFrame(s: FrameSignal): boolean {
-    return this.phase.kind === 'frontal' && isNeutral(s) && s.size >= MIN_FACE_SIZE;
+    return this.phase.kind === 'frontal' && this.isNeutral(s) && s.size >= MIN_FACE_SIZE;
   }
 
   /** Report that a frontal descriptor was taken from the frame at time t. */
@@ -245,6 +268,7 @@ export class LivenessCeremony {
       return this.phase;
     }
     this.lastFaceAt = s.t;
+    this.learnBlinkBaseline(s);
 
     if (this.phase.kind === 'frontal') {
       if (s.t - this.phaseStart > FRONTAL_TIMEOUT_MS) return this.fail('timeout');
@@ -253,18 +277,18 @@ export class LivenessCeremony {
 
     const p = this.phase;
     const elapsed = s.t - p.promptAt;
-    if (elapsed > CHALLENGE_TIMEOUT_MS) return this.fail('timeout');
+    if (elapsed > CHALLENGE_TIMEOUT_MS) return this.fail(p.challenge === 'blink' ? 'blink_not_seen' : 'timeout');
 
     // Every challenge starts from a neutral pose seen after its prompt.
     if (!this.sawNeutral) {
-      if (isNeutral(s)) {
+      if (this.isNeutral(s)) {
         this.sawNeutral = true;
         this.neutralPts = s.pts;
         this.baselineSize = s.size;
       }
       return this.phase;
     }
-    if (isNeutral(s) && p.challenge !== 'closer') {
+    if (this.isNeutral(s) && p.challenge !== 'closer') {
       // Keep the latest neutral frame as the parallax reference.
       this.neutralPts = s.pts;
     }
@@ -281,9 +305,9 @@ export class LivenessCeremony {
         break;
       }
       case 'blink':
-        if (s.blink > BLINK_CLOSED) {
+        if (s.blink > this.blinkClosed()) {
           if (this.closedAt < 0) this.closedAt = s.t;
-        } else if (this.closedAt >= 0 && s.blink < BLINK_OPEN) {
+        } else if (this.closedAt >= 0 && s.blink < this.blinkOpen()) {
           done = s.t - this.closedAt <= BLINK_MAX_CLOSED_MS;
           this.closedAt = -1;
         }
@@ -323,6 +347,28 @@ export class LivenessCeremony {
     this.phaseStart = t;
   }
 
+  /** Eyes count as open below this. */
+  blinkOpen(): number {
+    return Math.min(BLINK_OPEN_CAP, Math.max(BLINK_OPEN, this.blinkBaseline + BLINK_OPEN_MARGIN));
+  }
+
+  /** Eyes count as closed above this. */
+  blinkClosed(): number {
+    return Math.min(BLINK_CLOSED_CAP, Math.max(BLINK_CLOSED, this.blinkBaseline + BLINK_CLOSED_MARGIN));
+  }
+
+  private isNeutral(s: FrameSignal): boolean {
+    return Math.abs(s.yaw) < YAW_NEUTRAL && s.blink < this.blinkOpen();
+  }
+
+  /** Learns the open-eye score from the first frontal frames of the ceremony. */
+  private learnBlinkBaseline(s: FrameSignal) {
+    if (this.blinkSamples.length >= BLINK_BASELINE_FRAMES || Math.abs(s.yaw) >= YAW_NEUTRAL) return;
+    this.blinkSamples.push(s.blink);
+    const sorted = [...this.blinkSamples].sort((a, b) => a - b);
+    this.blinkBaseline = sorted[Math.floor((sorted.length - 1) * 0.3)];
+  }
+
   private finish() {
     this.phase = { kind: 'done' };
   }
@@ -331,10 +377,6 @@ export class LivenessCeremony {
     this.phase = { kind: 'failed', reason };
     return this.phase;
   }
-}
-
-function isNeutral(s: FrameSignal): boolean {
-  return Math.abs(s.yaw) < YAW_NEUTRAL && s.blink < BLINK_OPEN;
 }
 
 function round3(x: number): number {
