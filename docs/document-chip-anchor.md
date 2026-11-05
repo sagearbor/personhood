@@ -194,3 +194,9 @@ on Aadhaar QRs made after February 2026.**
 - Not done: a real passport. BSI's and ICAO's test passports and test PKI
   have to be requested, and were not available to this work. The Pixel 10
   test below is the first real-chip check.
+
+## Zero-knowledge variant
+
+`document-chip-zk` (design and spike in docs/zk-passport.md) proves the
+same passive-authentication facts on the phone, so DG1 never reaches the
+issuer.
