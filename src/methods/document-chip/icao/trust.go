@@ -34,6 +34,12 @@ func (t *TrustStore) Add(c *Certificate) {
 	t.certs = append(t.certs, c)
 }
 
+// Certificates returns the CSCA certificates in the order they were added.
+// The slice is a copy; the certificates are shared and must not be changed.
+func (t *TrustStore) Certificates() []*Certificate {
+	return append([]*Certificate(nil), t.certs...)
+}
+
 // Len returns the number of certificates.
 func (t *TrustStore) Len() int { return len(t.certs) }
 

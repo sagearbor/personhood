@@ -77,7 +77,7 @@ func identifierKindForMethod(methodID string) string {
 		return identifierKindEmail
 	case "sms", "phone-carrier-tier":
 		return identifierKindPhone
-	case documentchip.ChipMethodID, documentchip.QRMethodID:
+	case documentchip.ChipMethodID, documentchip.QRMethodID, documentchip.ZKMethodID:
 		return identifierKindDocument
 	default:
 		return ""

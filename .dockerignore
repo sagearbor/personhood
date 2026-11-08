@@ -31,3 +31,9 @@ env.example
 # OS noise
 .DS_Store
 *.swp
+
+# zk-passport: the spike's downloads, and the circuit tool's caches (its
+# dist/ artifacts DO go in: the Dockerfile copies them).
+spikes
+tools/zk-circuits/node_modules
+tools/zk-circuits/.work

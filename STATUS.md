@@ -16,6 +16,8 @@
 | **Uniqueness, privacy, dual documents** | `src/server/documentanchor.go`, `identifier.go` (kind `document`) | One identity per document through `IDENTIFIER_HMAC_KEY` seeds (required). Raw number, name, DOB never stored. Face match to the document photo is done on the phone (`app/web/app/face-bind`, loaded in the wallet's WebView); a face matching an identity enrolled with another document is issued and queued for review (`GET /v1/admin/document-reviews`), never refused. |
 
 Untested on a real chip yet (the vectors are openssl-generated ICAO-format files and the real German master list); see `docs/document-chip-anchor.md`.
+
+**Zero-knowledge passport** (`document-chip-zk`, behind `DOCUMENT_CHIP_ZK=1`, needs `DOCUMENT_CHIP_ANCHOR=1`): the phone proves passive authentication in zero knowledge (zkPassport Noir circuits, UltraHonk) and sends four proofs bound to the session; the issuer learns one scoped per-passport number, not the name, number or country. Strength 70 (no AA yet). `src/methods/document-chip/zkmethod.go`, `zkregistry.go`, `zkproof/`, circuit build in `tools/zk-circuits/`, design and measurements in `docs/zk-passport.md`. RSA passports only until `noir_bigcurve` (ECDSA) has a license. Not yet tried with a real passport.
 ## Never false-lockout (2026-11-04, behind `NO_FALSE_LOCKOUT=1`, default off)
 
 Owner principle: a signal may route or add friction, never shut out an honest person with no alternative. Design and audit: [docs/08-no-false-lockout.md](docs/08-no-false-lockout.md); the owner's edge-case list mapped to tests: [docs/EDGE_CASES.md](docs/EDGE_CASES.md).
