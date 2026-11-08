@@ -457,28 +457,88 @@ changes a circuit):
 CI and production should compile with `nargo` 1.0.0-beta.22, which avoids
 the first three.
 
-## Phase 2 plan
+## Phase 2: the phone side (OpenLine wallet)
 
-| # | Work | Estimate |
+- **Prover:** Expo module `mobile/modules/zk-prover`: a Rust library around
+  zkpassport/noir_rs `v1.0.0-beta.22-1` (Apache-2.0; Noir beta.22 ACVM for the
+  witness, Barretenberg 5.0.0 via barretenberg-rs' prebuilt static library,
+  SHA-256 pinned) behind JNI. Chosen over mopro (an extra framework layer
+  around the same two pieces) and bb.js in a WebView (WASM, slower, more
+  memory): noir_rs is what zkPassport's own app uses, matches our pins
+  exactly, and its proofs verify with the issuer's `bb verify -t
+  noir-recursive` unchanged. arm64 only (Barretenberg has no 32-bit build);
+  other phones see the method as unavailable. About +19.5 MB of APK (7.8 MB
+  compressed). Not in the F-Droid flavour (prebuilt binary, needs Rust).
+- **Input builder:** our own TypeScript (`mobile/src/services/zkPassport/`:
+  DER, X.509, EF.SOD, Poseidon2, registry path, circuit matcher, the four
+  input objects), written from ICAO 9303, RFC 5280/5652 and the circuits'
+  signatures. `@zkpassport/utils` is not used. Its output equals zkPassport's
+  for the test vectors and executes all four real circuits (p256, rsa-pss,
+  brainpool-256). ECDSA `s` is normalised to low-s (the circuits require
+  it), and the private nullifier is computed over the normalised signature.
+- **Flow:** the wallet prefers `document-chip-zk` whenever the issuer offers
+  it and the phone can prove (arm64 prover, ≥ 2.7 GB RAM, not low on
+  memory): read the chip (no AA), face bind on the phone as today, download
+  the four circuits + the SRS prefix it needs (cached by hash), prove, send
+  only the proofs and the face-bind outcome. Sending the passport data
+  (`document-chip`) is an explicit choice with an honest explanation, shown
+  only when the phone cannot prove or proving failed in a way the plain
+  method could get past.
+
+### Measured (2026-11-08)
+
+`zkprove` CLI (the same Rust code as the app) on Android 15 arm64 emulators
+running on an Apple M4 through the hypervisor: **not representative of a
+Pixel 10 or a $50 phone**, which are still to be measured. Witness + prove
+seconds and peak RSS for the test vectors (`expiry` stands in for `bind`,
+which has the same size):
+
+| | 4 GB / 8 threads | 4 GB / 4 threads | 4 GB / 1 thread | 2 GB / 4 threads | peak RSS |
+|---|---|---|---|---|---|
+| p256 (all 4) | 11 s | 13 s | 22 s | 12 s | 476 MB (id) |
+| rsa-pss (all 4) | 6 s | 7 s | 14 s | 6 s | 374 MB (dsc) |
+
+All 48 emulator proofs verified with `bb verify`. On the Mac the wallet's
+end-to-end test (below) proves rsa-pss in about 6 s with 4 threads, peak
+660 MB. The largest core-set circuit (`dsc`, tbs 1600, RSA-4096, SHA-512) has
+543k gates, twice the spike's largest; expect roughly double the time and
+memory for passports that need it.
+
+### End-to-end test
+
+`mobile/src/services/__tests__/zkPassportE2E.test.ts` (OpenLine) runs the
+wallet's real `enrollByDocument` against a real local issuer started with
+`DOCUMENT_CHIP_ANCHOR=1 DOCUMENT_CHIP_ZK=1` and the rsa-pss test CSCA,
+proving with the host build of the prover: registry and manifest download,
+artifact download with hash checks, CSCA lookup and Merkle path, input
+building, four real proofs, issuer verification with session binding,
+credential issuance, and a second enrollment of the same passport giving the
+same nullifier commitment. It checks that no DG1, SOD or document number
+leaves the "phone". Only NFC, the selfie and the UI are faked.
+
+## Phase 2 plan (status)
+
+| # | Work | Status |
 |---|---|---|
-| 1 | **Issuer method** `document-chip-zk` (off unless `DOCUMENT_CHIP_ZK=1`): wrap `zkproof` as a `types.Method`, begin/complete ceremony, refusal reasons above, identifier kind `document`, strength 70, face-bind payload reused, `bb` in the Docker image, pinned vk manifest embedded. Tests with the committed fixtures. | 3 days |
-| 2 | **Session binding**: replace the `expiry` sub-proof with `bind` (session challenge + holder DID; it also checks expiry), and the Go check of its parameter commitment (Poseidon2 with Barretenberg parameters in Go, cross-checked against noir test vectors). | 2–3 days |
-| 3 | **Registry**: build script from the embedded BSI list, published file + accepted roots list, 60-day grace, runbook section, test that every CSCA that chains today has a leaf. | 2 days |
-| 4 | **Circuit artifacts**: compile the needed variants with nargo in CI (start with the algorithms in the BSI list; about 60–100 variants cover real passports), publish artifacts to our own hosting with a hash manifest, pin vk hashes in the issuer. | 2–3 days |
-| 5 | **Android proving in the wallet** (OpenLine `mobile/modules/`): Expo module around `noir_rs` (Apache-2.0) or mopro, fed by JMRTD's DG1/SOD; port or license-clear the input builder; download only the 4 artifacts a passport needs; progress UI; fall back paths. | 1.5–2 weeks |
-| 6 | **Measure on a low-end phone** (2–3 GB RAM Android): time, peak memory, thermal; decide whether to offer a helper-proved `dsc` step (that step uses only public certificates plus a salt; the helper learns the DSC, which narrows the state and issue period, not the person). | 2 days |
-| 7 | iOS (same module via noir_rs) | 1 week, after Android |
-| 8 | Phase 3: Active Authentication in-circuit (ISO 9796-2 RSA + ECDSA), OPRF-salted nullifier, external audit of the enabled circuits | 3–5 weeks + audit |
+| 1 | Issuer method `document-chip-zk` | Done (this PR) |
+| 2 | Session binding (`bind`, Poseidon2 in Go) | Done |
+| 3 | Registry from the BSI list, published, 60-day grace | Done |
+| 4 | Circuit artifacts: reproducible build, hosting, pinned vks | Done (74-variant RSA core set) |
+| 5 | Android proving in the wallet | Done (OpenLine PR); not yet run on a real phone |
+| 6 | Measure on a real Pixel 10 and a low-end phone (2–3 GB) | **To do** (owner's phone first) |
+| 7 | iOS (same Rust via noir_rs) | Later |
+| 8 | Phase 3: AA in-circuit, OPRF-salted nullifier, audit; ECDSA once `noir_bigcurve` is licensed | Later |
 
-Before anything ships: resolve the `zkpassport-packages` license question,
-and get the enabled circuits reviewed.
+Before anything ships beyond testing: resolve the `noir_bigcurve` license
+question (ECDSA passports), and get the enabled circuits reviewed.
 
 ## Reproducing
 
 ```sh
-spikes/zk-passport/run.sh                       # both vectors, ~70 s first run
-HARDWARE_CONCURRENCY=1 PROFILES=p256 spikes/zk-passport/run.sh
-cd src/methods/document-chip && go test ./zkproof/   # needs bb: $BB, PATH, or the spike's node_modules
+spikes/zk-passport/run.sh                       # phase-1 spike, both vectors
+ZK_SCOPE=0x28a6676ad15b10f2b78fb5f1e25cd20c68e5d4611ecf6b364df8427d0c69edfe node spikes/zk-passport/bind-fixtures.mjs   # regenerate the bind fixtures
+tools/zk-circuits/build.sh                      # circuit artifacts + pinned vks
+cd src/methods/document-chip && go test ./...   # needs bb: $BB, PATH, or tools/zk-circuits/node_modules
 ```
 
 `run.sh` downloads about 250 MB of npm packages and the circuits repo into
