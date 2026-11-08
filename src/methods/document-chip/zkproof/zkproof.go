@@ -6,22 +6,26 @@
 //     (a Poseidon2 Merkle root) signed the document signer certificate;
 //  2. id:        that DSC signed the passport's EF.SOD;
 //  3. integrity: EF.SOD's hashes cover DG1 (name, number, birth date) and DG2;
-//  4. expiry:    the document has not expired on the public current_date, and
+//  4. bind:      the document has not expired on the public current_date;
 //     the scoped nullifier is Poseidon2(private nullifier, scope, subscope),
-//     where the private nullifier is Poseidon2(DG1, eContent, SOD signature).
+//     where the private nullifier is Poseidon2(DG1, eContent, SOD signature);
+//     and the proof commits to 509 bytes of data (the parameter commitment),
+//     which the issuer sets to its session challenge and the holder's DID,
+//     so a bundle cannot be replayed into another session.
 //
 // The sub-proofs are linked by salted commitments: each one's output
 // commitment is the next one's public input. None of DG1, the document
 // number, the photo or the signatures appears in any public input.
 //
-// This is the phase-1 spike (docs/zk-passport.md). It is not wired into any
-// method yet. Verification shells out to Barretenberg's `bb verify`; there is
-// no native Go UltraHonk verifier.
+// The document-chip-zk method (../zkmethod.go) wraps it. Verification shells
+// out to Barretenberg's `bb verify`; there is no native Go UltraHonk
+// verifier. See docs/zk-passport.md.
 package zkproof
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -29,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -43,7 +48,7 @@ const ProofSize = 14656
 // VerifierTarget is the bb verifier target the wallet proves with.
 const VerifierTarget = "noir-recursive"
 
-// Nullifier types the expiry circuit outputs (zkPassport utils/constants.nr).
+// Nullifier types the bind circuit outputs (zkPassport utils/constants.nr).
 const (
 	NullifierNonSalted     = 0
 	NullifierSalted        = 1
@@ -53,7 +58,44 @@ const (
 )
 
 // Stage names, in chain order.
-var Stages = []string{"dsc", "id", "integrity", "expiry"}
+var Stages = []string{"dsc", "id", "integrity", "bind"}
+
+// BindCircuit is the one circuit accepted for the last stage.
+const BindCircuit = "bind"
+
+// BindDataSize is the bind circuit's committed data length.
+const BindDataSize = 509
+
+// proofTypeBind is zkPassport's PROOF_TYPE_BIND, the first element of the
+// parameter commitment.
+const proofTypeBind = 8
+
+// ScopeLabel is hashed into the service scope, so this issuer's nullifiers
+// are unrelated to any other service's for the same passport.
+const ScopeLabel = "personhood:document-chip-zk:v1"
+
+// ServiceScope is Poseidon2(pack_be(ScopeLabel)).
+func ServiceScope() [FieldSize]byte {
+	return FieldBytes(Poseidon2Hash(PackBEBytesIntoFields([]byte(ScopeLabel))))
+}
+
+// BindData lays out the bind circuit's data: the 32-byte session challenge,
+// then SHA-256("personhood/zk-bind/v1" 0x00 holder DID), then zeros.
+func BindData(challenge [32]byte, holderDID string) [BindDataSize]byte {
+	var d [BindDataSize]byte
+	copy(d[:32], challenge[:])
+	h := sha256.Sum256(append([]byte("personhood/zk-bind/v1\x00"), holderDID...))
+	copy(d[32:64], h[:])
+	return d
+}
+
+// ParamCommitment is calculate_param_commitment(data) from zkPassport's
+// lib/bind: Poseidon2(PROOF_TYPE_BIND, 17, pack_be_bytes_into_fields(data)).
+func ParamCommitment(data [BindDataSize]byte) [FieldSize]byte {
+	packed := PackBEBytesIntoFields(data[:])
+	in := append([]*big.Int{big.NewInt(proofTypeBind), big.NewInt(int64(len(packed)))}, packed...)
+	return FieldBytes(Poseidon2Hash(in))
+}
 
 // SubProof is one stage's proof and its public inputs, exactly as bb writes
 // them (proof bytes; public inputs as concatenated 32-byte big-endian fields).
@@ -65,7 +107,7 @@ type SubProof struct {
 
 // Bundle is what the wallet sends: one sub-proof per stage.
 type Bundle struct {
-	DSC, ID, Integrity, Expiry SubProof
+	DSC, ID, Integrity, Bind SubProof
 }
 
 // Result is what a verified bundle establishes.
@@ -101,6 +143,7 @@ var (
 	ErrScope           = errors.New("zkproof: proof is for another scope")
 	ErrStaleDate       = errors.New("zkproof: proof's current_date is not today")
 	ErrMockDocument    = errors.New("zkproof: mock (test) document")
+	ErrBindMismatch    = errors.New("zkproof: proof is bound to another session")
 )
 
 // Verifier checks bundles.
@@ -127,7 +170,7 @@ type Verifier struct {
 }
 
 // public input counts per stage
-var wantInputs = map[string]int{"dsc": 2, "id": 2, "integrity": 2, "expiry": 8}
+var wantInputs = map[string]int{"dsc": 2, "id": 2, "integrity": 2, "bind": 8}
 
 func fields(sp SubProof, stage string) ([][FieldSize]byte, error) {
 	n := wantInputs[stage]
@@ -149,10 +192,12 @@ func small(f [FieldSize]byte) (int64, bool) {
 	return v.Int64(), v.IsInt64()
 }
 
-// Verify checks all four sub-proofs and the links between them.
-func (v *Verifier) Verify(ctx context.Context, b Bundle) (Result, error) {
+// Verify checks all four sub-proofs and the links between them, and that
+// the bind sub-proof commits to bindData (BindData of this session's
+// challenge and holder DID).
+func (v *Verifier) Verify(ctx context.Context, b Bundle, bindData [BindDataSize]byte) (Result, error) {
 	var res Result
-	sps := []SubProof{b.DSC, b.ID, b.Integrity, b.Expiry}
+	sps := []SubProof{b.DSC, b.ID, b.Integrity, b.Bind}
 	pub := make([][][FieldSize]byte, len(sps))
 	for i, sp := range sps {
 		f, err := fields(sp, Stages[i])
@@ -167,7 +212,7 @@ func (v *Verifier) Verify(ctx context.Context, b Bundle) (Result, error) {
 	// dsc:       [certificate_registry_root, comm_out]
 	// id:        [comm_in, comm_out]
 	// integrity: [comm_in, comm_out]
-	// expiry:    [comm_in, current_date, service_scope, service_subscope,
+	// bind:      [comm_in, current_date, service_scope, service_subscope,
 	//             param_commitment, nullifier_type, nullifier, oprf_pk_hash]
 	if dsc[1] != id[0] || id[1] != integ[0] || integ[1] != exp[0] {
 		return res, ErrChainBroken
@@ -177,6 +222,9 @@ func (v *Verifier) Verify(ctx context.Context, b Bundle) (Result, error) {
 	}
 	if exp[2] != v.Scope || exp[3] != v.Subscope {
 		return res, ErrScope
+	}
+	if exp[4] != ParamCommitment(bindData) {
+		return res, ErrBindMismatch
 	}
 	date, ok := small(exp[1])
 	now := time.Now
@@ -231,12 +279,40 @@ func circuitMatchesStage(name, stage string) bool {
 		"dsc":       "sig_check_dsc_",
 		"id":        "sig_check_id_data_",
 		"integrity": "data_check_integrity_",
-		"expiry":    "compare_expiry",
 	}[stage]
-	return len(name) >= len(prefix) && name[:len(prefix)] == prefix
+	if stage == "bind" {
+		return name == BindCircuit
+	}
+	return prefix != "" && len(name) > len(prefix) && name[:len(prefix)] == prefix
+}
+
+// UltraHonk verification needs only the first point of the BN254 G1 CRS,
+// which is the curve generator (1, 2). Writing it to a local CRS directory
+// stops bb from downloading 4 MB of CRS from the internet on first use.
+var (
+	crsOnce sync.Once
+	crsDir  string
+	crsErr  error
+)
+
+func localCRS() (string, error) {
+	crsOnce.Do(func() {
+		crsDir, crsErr = os.MkdirTemp("", "zkproof-crs-")
+		if crsErr != nil {
+			return
+		}
+		var g1 [64]byte
+		g1[31], g1[63] = 1, 2
+		crsErr = os.WriteFile(filepath.Join(crsDir, "bn254_g1.dat"), g1[:], 0o600)
+	})
+	return crsDir, crsErr
 }
 
 func (v *Verifier) bbVerify(ctx context.Context, vk []byte, sp SubProof) error {
+	crs, err := localCRS()
+	if err != nil {
+		return fmt.Errorf("zkproof: local CRS: %w", err)
+	}
 	dir, err := os.MkdirTemp("", "zkproof-")
 	if err != nil {
 		return err
@@ -249,7 +325,7 @@ func (v *Verifier) bbVerify(ctx context.Context, vk []byte, sp SubProof) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, v.BB, "verify", "-t", VerifierTarget,
+	cmd := exec.CommandContext(ctx, v.BB, "verify", "-c", crs, "-t", VerifierTarget,
 		"-k", filepath.Join(dir, "vk"), "-p", filepath.Join(dir, "proof"), "-i", filepath.Join(dir, "public_inputs"))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

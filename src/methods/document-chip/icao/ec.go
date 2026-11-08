@@ -316,3 +316,35 @@ func parseECDSASignature(sig []byte) (*big.Int, *big.Int, error) {
 	}
 	return nil, nil, errors.New("malformed ECDSA signature")
 }
+
+// StandardName names the curve by its parameters, whatever way the
+// certificate encoded it (named OID or explicit parameters): "P-224",
+// "P-256", "P-384", "P-521", "brainpoolP224r1" … "brainpoolP512r1", or ""
+// when the parameters match none of those.
+func (c *Curve) StandardName() string {
+	if c == nil {
+		return ""
+	}
+	for _, std := range []elliptic.Curve{elliptic.P224(), elliptic.P256(), elliptic.P384(), elliptic.P521()} {
+		p := std.Params()
+		if c.P.Cmp(p.P) == 0 && c.B.Cmp(p.B) == 0 && c.N.Cmp(p.N) == 0 {
+			return p.Name
+		}
+	}
+	names := map[string]string{
+		"1.3.36.3.3.2.8.1.1.5": "brainpoolP224r1", "1.3.36.3.3.2.8.1.1.7": "brainpoolP256r1",
+		"1.3.36.3.3.2.8.1.1.9": "brainpoolP320r1", "1.3.36.3.3.2.8.1.1.11": "brainpoolP384r1",
+		"1.3.36.3.3.2.8.1.1.13": "brainpoolP512r1",
+	}
+	for oid, h := range brainpoolExplicitDER {
+		der, _ := hex.DecodeString(h)
+		bp, err := parseExplicitCurve(der)
+		if err == nil && c.P.Cmp(bp.P) == 0 && c.A.Cmp(bp.A) == 0 && c.B.Cmp(bp.B) == 0 && c.N.Cmp(bp.N) == 0 {
+			return names[oid]
+		}
+	}
+	return ""
+}
+
+// ByteLen is the byte length of one coordinate.
+func (c *Curve) ByteLen() int { return c.byteLen() }

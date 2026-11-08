@@ -1,14 +1,17 @@
 # Zero-knowledge passport (`document-chip-zk`)
 
-Status: **design + phase-1 spike**. Nothing here is wired into the issuer.
-The existing `document-chip` method (docs/document-chip-anchor.md) is
-unchanged. The new method id is `document-chip-zk`, off by default.
+Status: **phase 2 built, behind `DOCUMENT_CHIP_ZK=1` (off by default)**.
+The issuer method, session binding, CSCA registry, pinned circuit set and the
+Android wallet prover (OpenLine `mobile/modules/zk-prover`) exist; a real
+passport on a real phone has not been through it yet. The existing
+`document-chip` method (docs/document-chip-anchor.md) is unchanged and stays
+the fallback. Method id `document-chip-zk`, strength 70.
 
 ## The problem, in one table
 
 | | `document-chip` (today) | `document-chip-zk` (this design) |
 |---|---|---|
-| What the phone sends | DG1 (name, document number, birth date, MRZ), EF.SOD, DSC, AA signature | Four zero-knowledge proofs (4 × 14.6 KB) plus 14 public numbers |
+| What the phone sends | DG1 (name, document number, birth date, MRZ), EF.SOD, DSC, AA signature | Four zero-knowledge proofs (4 × 14.6 KB) plus 14 public numbers, and the face-bind outcome |
 | What the issuer learns | Everything in DG1, then drops it | That *some* passport chained to a CSCA in our list is valid today, and one opaque per-passport number |
 | Country | Learned (from the CSCA) | Not learned |
 | Photo (DG2) | Stays on the phone | Stays on the phone |
@@ -69,9 +72,9 @@ random and stay on the phone, so the commitments reveal nothing, but a proof
 of one passport cannot be chained to a proof of another.
 
 ```
-  dsc ──comm──▶ id ──comm──▶ integrity ──comm──▶ expiry
+  dsc ──comm──▶ id ──comm──▶ integrity ──comm──▶ bind
    │                                               │
-   └ registry root (public)        current date, scope, nullifier (public)
+   └ registry root (public)   current date, scope, nullifier, session commitment (public)
 ```
 
 | Sub-proof | Proves | Public inputs |
@@ -79,7 +82,7 @@ of one passport cannot be chained to a proof of another.
 | `dsc` (sig_check_dsc_…) | A CSCA in the published registry (Merkle path) signed this DSC | registry root, commitment out |
 | `id` (sig_check_id_data_…) | That DSC signed EF.SOD's signed attributes | commitment in, out |
 | `integrity` (data_check_integrity_…) | The signed attributes hash eContent; eContent lists the hash of DG1 (and DG2) | commitment in, out |
-| `expiry` (compare_expiry) | DG1's expiry date is on or after `current_date`; outputs the scoped nullifier | commitment in, current date, scope, subscope, parameter commitment, nullifier type, nullifier, OPRF key hash |
+| `bind` (bind) | DG1's expiry date is on or after `current_date`; outputs the scoped nullifier; commits to 509 bytes of data (the issuer's session challenge and the holder DID) | commitment in, current date, scope, subscope, parameter commitment, nullifier type, nullifier, OPRF key hash |
 
 The circuits also tie the country together: the CSCA's registry leaf carries
 a country, and the `id` circuit rebuilds the incoming commitment with the
@@ -106,6 +109,9 @@ keys from its own pinned list.
    is today (±36 h for time zones).
 5. `nullifier = Poseidon2(private_nullifier, scope, subscope)`, where
    `private_nullifier = Poseidon2(DG1 ‖ eContent ‖ SOD signature)`.
+6. The proof was made for this session: its parameter commitment is
+   `Poseidon2(8, 17, pack(data))` with `data` = the 32-byte challenge from
+   `begin` ‖ SHA-256("personhood/zk-bind/v1" 0x00 ‖ holder DID) ‖ zeros.
 
 Optional disclosures (nationality, age over N) are separate zkPassport
 circuits that chain from the same `integrity` commitment. They are **off by
@@ -172,19 +178,17 @@ proof). Until then `document-chip-zk` is passive-only, which is the same
 footing as `DOCUMENT_CHIP_ALLOW_PASSIVE_ONLY=1` today: strength **70**, not 80.
 Chips without DG15 stay at 70 in either design.
 
-### Session binding (needed before launch, phase 2)
+### Session binding (done in phase 2)
 
-The four proofs are not tied to an issuer session. Anyone who obtained a
-person's bundle within the ±36 h date window could submit it and get a
-credential for that person's identity. The wallet sends the bundle over TLS
-from the holder's own phone, so the exposure is small, but it must be
-closed. zkPassport's `bind` circuit takes the same inputs as `expiry`, also
-checks that the document has not expired, outputs the same nullifier, and
-commits to up to 509 bytes of custom data. Phase 2 swaps `expiry` for `bind`
-(still four proofs) with the data set to the issuer's session challenge and
-the holder's DID key. The issuer then checks that commitment, which needs a
-Poseidon2 (Barretenberg parameters) in Go. AA option B would also provide
-this.
+zkPassport's `bind` circuit replaces `expiry` as the fourth sub-proof. It
+checks the same expiry, outputs the same nullifier, and commits to 509 bytes
+of data. `begin` returns that data (`bind_data_hex`): a fresh 32-byte
+challenge and a hash of the session's holder DID. `complete` recomputes the
+commitment (Poseidon2 with Barretenberg's parameters, in Go:
+`zkproof/poseidon2.go`, checked against the circuits) and refuses any other
+(`zk_bind_mismatch`). Each challenge answers one `complete` and lives 30
+minutes, so a bundle cannot be replayed into another session, by another
+holder key, or twice.
 
 ## Face bind stays on the phone
 
@@ -200,23 +204,30 @@ attestation of the match in-circuit; worth a look in phase 3.
 
 ## How the issuer verifies (Go)
 
-`src/methods/document-chip/zkproof` (this branch) does it:
+`src/methods/document-chip/zkproof` checks a bundle and
+`src/methods/document-chip/zkmethod.go` is the method around it:
 
 1. Shape: each sub-proof is 14,656 bytes; public inputs are 2, 2, 2 and 8
    fields.
 2. Chain: `dsc.out == id.in`, `id.out == integrity.in`,
-   `integrity.out == expiry.in`.
-3. Registry root is one this issuer published; scope/subscope are ours;
-   `current_date` is today; nullifier type is "non-salted, real document"
-   (mock documents from zkPassport's test state ZKR are refused unless a test
-   flag allows them).
+   `integrity.out == bind.in`.
+3. Registry root is one this issuer published (current, or retired less than
+   60 days ago); scope/subscope are ours (scope =
+   `Poseidon2("personhood:document-chip-zk:v1")`, pinned by a test because
+   changing it would re-key every passport); the parameter commitment is this
+   session's; `current_date` is within 36 h of now; nullifier type is
+   "non-salted, real document" (zkPassport's mock state ZKR is refused).
 4. Each sub-proof verifies under a verification key from the issuer's own
-   pinned list, and the circuit name matches its stage (no proving `id` with
-   an `integrity` vk).
-5. Verification runs Barretenberg's `bb verify` (pinned 5.0.0). There is no
-   native Go UltraHonk verifier. The `bb` binary ships in the npm package
-   `@aztec/bb.js` for macOS and Linux (x86-64 and arm64), so the Docker image
-   copies one file. It is MIT licensed.
+   pinned set (`zk/circuits.json` + `zk/vks/`, each key's SHA-256 checked at
+   start-up), and the circuit name matches its stage (`bind` only for the
+   last stage).
+5. Verification runs Barretenberg's `bb verify` (pinned 5.0.0, checked with
+   `bb --version` at start-up), at most 4 at a time. There is no native Go
+   UltraHonk verifier. The Docker image takes `bb` from the npm package
+   `@aztec/bb.js` 5.0.0 (MIT; tarball SHA-256 pinned in the Dockerfile) and
+   so moves from distroless `static` to `base` (bb needs glibc). The verifier
+   writes the one CRS point verification needs (the BN254 generator) to a
+   temp directory and passes `-c`, so bb never downloads the CRS.
 
 The result is the identifier `chip:ZK:<nullifier hex>`, which goes through
 the existing identifier path unchanged (kind `document`, HMAC under
@@ -224,42 +235,135 @@ the existing identifier path unchanged (kind `document`, HMAC under
 credential is the same W3C VC with the same `nullifierBinding` scheme the
 issuer issues today. No new storage.
 
-Refusals, each with a next step (no false lockout):
+Refusals, each with a next step (no false lockout). The wallet turns each
+into text with what to do next and always offers `document-chip` (with an
+honest note that it sends the passport data) or another way in:
 
 | Reason | Meaning | Next step |
 |---|---|---|
-| `zk_registry_unknown` | Proof used a registry root we don't publish (stale app cache) | Wallet refreshes the registry and proves again, automatically |
-| `zk_circuit_unsupported` | The passport needs a circuit variant we don't serve | Offer `document-chip` (sends DG1) or selfie/vouch |
-| `zk_csca_untrusted` | The CSCA is not in the registry, so the phone could not even build the proof | Same as `csca_untrusted` today |
-| `zk_proof_invalid`, `zk_chain_broken` | Bad or mixed proofs | Prove again; if it repeats, another path |
-| `zk_date_stale` | `current_date` is not today (clock wrong, or old bundle) | Fix the clock / prove again |
-| `zk_document_expired` | The phone cannot prove "not expired" | Use a valid document, or another path |
-| `zk_device_too_weak` | Not enough memory to prove | Fall back to `document-chip` with consent, or a helper-proved `dsc` step (below), or selfie/vouch |
+| `zk_registry_unknown` | Proof used a registry root we don't publish (stale app cache) | Wallet refreshes the registry, begins again and proves again, once, automatically |
+| `zk_circuit_unsupported` | A circuit the passport needs is not in the pinned set (the wallet knows before proving, from the manifest) | Offer `document-chip` or another way; the wallet shows the variant name so it can be added |
+| `zk_proof_invalid`, `zk_chain_broken`, `zk_bundle_malformed` | Bad or mixed proofs | Prove again; if it repeats, another path |
+| `zk_bind_mismatch` | Proof made for another session or holder key | Start again (new session) |
+| `zk_date_stale` | `current_date` is more than 36 h from the issuer's clock | Fix the phone's clock, prove again |
+| `zk_scope_mismatch`, `zk_mock_document` | Proof for another service, or a test document | Another path |
+| wallet: document expired | The phone cannot prove "not expired" (the circuit refuses) | Use a valid document, or another path |
+| wallet: device too weak | Not enough memory, or no arm64 prover | `document-chip` with consent, or selfie/vouch |
+| `face_bind_missing`, `face_bind_failed`, ... | Same as `document-chip` | Same |
+| `no_challenge_issued` | `complete` without (or 30 min after) `begin`, or a second `complete` | Start again |
+
+A renewed passport has a new SOD and so a new identifier (`chip:ZK:…`). If its
+face template matches a face enrolled with another document, the credential is
+issued and a review case is queued (`GET /v1/admin/document-reviews`), as for
+`document-chip`: routed, never refused.
 
 ## The CSCA registry root
 
-- **Source:** the same BSI German master list the issuer already embeds and
-  verifies (609 CSCAs, pinned signer). One leaf per CSCA, in zkPassport's
-  v1 leaf format: `Poseidon2(tags, type, country, public key, expiry,
-  fingerprint)`. Root = `Poseidon2(version‖timestamp, Poseidon2(certificate
-  root, revocation root, master-list root))`.
-- **Build:** a release-time script (Node, `createPackagedCertificatesFile`
-  from `@zkpassport/utils`, or our own port) writes
-  `registry-<timestamp>.json`: the certificates, the serialized tree and the
-  root. Everything in it is public certificate data.
-- **Publish:** the issuer serves the current file at a static URL; phones
-  download it (about 1 MB for 600 CSCAs) and build their Merkle path
-  locally, so the issuer does not learn which CSCA a phone used. The issuer
-  accepts the current root and the previous ones for 60 days, because phones
-  cache the file.
-- **Update:** whenever the master list is refreshed (the existing runbook in
-  docs/document-chip-anchor.md, at least quarterly), rebuild the file, commit
-  the new root to the issuer's accepted-roots list, open a PR, redeploy.
-  Who decides is the issuer operator today. For OpenLine, Suffrage
-  governance can own the root later.
-- **Not checked in-circuit:** CSCA revocation. Like `document-chip`, CRLs are
-  not used yet; zkPassport binds a revocation root but its circuit does not
-  check it.
+- **Source:** the same trust store `document-chip` uses: the embedded BSI
+  master list (609 CSCAs, pinned signer) plus `DOCUMENT_CHIP_CSCA_PEM`.
+  `BuildZKRegistry` (`zkregistry.go`) makes one leaf per CSCA whose key a
+  circuit takes (RSA 1024–6144, NIST P-224…P-521, brainpool 224–512), in
+  zkPassport's v1 leaf format: `Poseidon2(tags, pack(type ‖ country ‖
+  expiry), fingerprint, pack(public key))`, tags 0, fingerprint =
+  `Poseidon2(pack_le(DER))`. The country is the 3-character issuing-state
+  code passports write in DG1 (ISO alpha-3, `D<<` for Germany, `RKS` for
+  Kosovo, `UNO`, `EUE`), because the `id` circuit ties the DSC to DG1's
+  issuing state. Leaves are sorted by (country, SHA-256 of the certificate),
+  so the root is deterministic. Root = `Poseidon2(pack(version ‖ timestamp),
+  Poseidon2(certificate root, 0, 0))`; the revocation and master-list roots
+  are 0 (the circuits bind them but do not check them). Timestamp = the
+  newest notBefore among the leaves. The tree code is checked against a
+  root and path the spike's circuits accepted.
+- **Built at start-up**, not committed: the issuer computes it in about 4
+  seconds and logs the root. Today all 609 CSCAs of the embedded list are
+  leaves (CSCAs with a key no circuit takes, or an unmapped country, would be
+  skipped and counted).
+- **Published** at `GET /v1/methods/document-chip-zk/registry` (about 600
+  KB JSON; leaves, keys, precomputed leaf hashes). Phones download all of it
+  and build their Merkle path locally, so the issuer does not learn which
+  CSCA a phone used.
+- **Accepted roots:** the current one, every root in
+  `src/methods/document-chip/zk/accepted_roots.json` retired less than 60
+  days ago (phones cache the file), and `DOCUMENT_CHIP_ZK_EXTRA_ROOTS`.
+- **Updating** (whenever the master list or `DOCUMENT_CHIP_CSCA_PEM`
+  changes): note the root the running issuer logs ("CSCA registry root …"),
+  deploy the new list, then add the old root to `accepted_roots.json` as
+  `{"root": "0x…", "retired": "YYYY-MM-DD"}` in the same PR. Who decides is
+  the issuer operator today; OpenLine governance can own the root later.
+- **Not checked in-circuit:** CSCA revocation, as for `document-chip`.
+
+## Circuit artifacts
+
+`tools/zk-circuits/build.sh` builds the variants listed in
+`tools/zk-circuits/variants/core.txt` reproducibly: zkPassport circuits at a
+pinned commit, Noir 1.0.0-beta.22 (`noir_wasm`) and bb 5.0.0 from the
+package-lock, the three `noir_wasm` workarounds above (none changes a
+circuit). For each variant it writes a stripped (`abi` + `bytecode` only),
+deterministically gzipped artifact to `tools/zk-circuits/dist/`, the
+verification key to `src/methods/document-chip/zk/vks/`, and the manifest
+`src/methods/document-chip/zk/circuits.json` (artifact SHA-256, size, gate
+count, vk SHA-256, license class). It also cuts the SRS the largest circuit
+needs out of bb's CRS cache (`dist/bn254_g1.dat`).
+
+- The issuer embeds the manifest and keys (commit them) and accepts only
+  those keys.
+- The artifacts are hosted by the issuer from
+  `DOCUMENT_CHIP_ZK_ARTIFACTS_DIR` (the Docker image copies
+  `tools/zk-circuits/dist` to `/zk-artifacts` when it exists at build time)
+  at `/v1/methods/document-chip-zk/artifacts/<file>`, or anywhere else via
+  `DOCUMENT_CHIP_ZK_ARTIFACTS_URL`. The issuer serves only files the manifest
+  lists, and warns at start-up about missing or changed ones.
+- The wallet fetches `GET /v1/methods/document-chip-zk/circuits`, works out
+  the four variants its passport needs, downloads only those (about 5–7 MB)
+  plus the SRS once, checks each SHA-256 against the manifest and caches them
+  by hash.
+- The core set (74 variants): `bind`, all 25 integrity variants, and RSA
+  `dsc`/`id` variants for RSA-4096/3072 CSCAs and RSA-2048…4096 document
+  signers with SHA-256 (PKCS#1 v1.5 and PSS; SHA-384/512 for RSA-4096
+  CSCAs), at every TBS size. That covers US-style passports (CSCA RSA-4096,
+  sha256WithRSA) if their DSC is RSA. A passport that needs another variant
+  is told so before proving, with the variant name, and offered
+  `document-chip`. Widening the set is a one-line change to the list plus a
+  rebuild.
+
+## Licenses
+
+| Component | License | Where it runs |
+|---|---|---|
+| zkPassport circuits | Apache-2.0 | compiled into the artifacts (phone), vks (issuer) |
+| noir_rsa, noir-bignum, noir-ecdsa, sha1, sha512, noir-lang poseidon/sha256 | Apache-2.0 | inside the artifacts |
+| noir-date, TaceoLabs noir-poseidon, oprf-nr | MIT | inside the artifacts |
+| **noir_bigcurve** (zkpassport fork of noir-lang/noir_bigcurve) | **none: no license file, upstream either** | inside every **ECDSA** artifact |
+| Noir (noir_wasm, ACVM), noir_rs | MIT/Apache-2.0, Apache-2.0 | build machine; phone |
+| Barretenberg (bb, libbarretenberg) | MIT (bb.js package) / Apache-2.0 | issuer; phone |
+| `@zkpassport/utils` (zkpassport-packages) | **none** | **not used** outside the phase-1 spike; the wallet has its own input builder |
+
+`noir_bigcurve` is needed by every ECDSA `dsc`/`id` variant (all NIST and
+brainpool curves); RSA variants do not use it. The core set therefore has no
+ECDSA variants, and `build.sh` refuses ECDSA variants unless
+`ZK_INCLUDE_UNLICENSED=1`; the manifest marks such artifacts
+`"license": "unlicensed-dependency"`. Options, least bad first: ask
+noir-lang (Aztec) to add a license to `noir_bigcurve` (all their other Noir
+libraries are MIT/Apache, so this looks like an oversight); for P-256 only,
+swap the curve check for Noir's built-in `std::ecdsa_secp256r1` black box
+(a circuit change we would have to review ourselves); or write our own
+curve library. Until then ECDSA passports use `document-chip`.
+
+## Running it (issuer)
+
+```sh
+tools/zk-circuits/build.sh            # once per variant-list or pin change; ~25 min for the core set
+DOCUMENT_CHIP_ANCHOR=1 DOCUMENT_CHIP_ZK=1 \
+DOCUMENT_CHIP_ZK_BB=tools/zk-circuits/node_modules/@aztec/bb.js/build/arm64-macos/bb \
+DOCUMENT_CHIP_ZK_ARTIFACTS_DIR=tools/zk-circuits/dist \
+IDENTIFIER_HMAC_KEY=... go run ./src/server/cmd/server
+```
+
+In Docker, `DOCUMENT_CHIP_ZK_BB` and `DOCUMENT_CHIP_ZK_ARTIFACTS_DIR` already
+point at `/usr/local/bin/bb` and `/zk-artifacts`; set `DOCUMENT_CHIP_ZK=1`
+(with `DOCUMENT_CHIP_ANCHOR=1`, which it requires) and run
+`tools/zk-circuits/build.sh` before building the image so the artifacts are
+inside it.
 
 ## Post-quantum
 

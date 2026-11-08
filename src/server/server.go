@@ -498,6 +498,19 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		if err := reg.Register(signedQR); err != nil {
 			return Dependencies{}, fmt.Errorf("register document-signed-qr: %w", err)
 		}
+		if zk := docDeps.zk; zk != nil {
+			if err := reg.Register(zk); err != nil {
+				return Dependencies{}, fmt.Errorf("register document-chip-zk: %w", err)
+			}
+			for _, rt := range []struct {
+				path string
+				h    http.Handler
+			}{{"registry", zk.RegistryHandler()}, {"circuits", zk.CircuitsHandler()}, {"artifacts/*", zk.ArtifactsHandler()}} {
+				deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
+					MethodID: documentchip.ZKMethodID, Path: rt.path, Method: http.MethodGet, Handler: rt.h,
+				})
+			}
+		}
 	}
 
 	// paid-billing-card (checklist #9): the strongest single supplementary

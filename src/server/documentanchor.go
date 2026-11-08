@@ -8,8 +8,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sagearbor/personhood/pkg/firestoreclient"
 	"github.com/sagearbor/personhood/pkg/redisclient"
@@ -34,6 +36,21 @@ import (
 //	DOCUMENT_FACE_BIND_URL=<url>        the web app's /face-bind page the
 //	                                    wallet opens for the face match
 //
+// Zero-knowledge passport (docs/zk-passport.md), on top of the above:
+//
+//	DOCUMENT_CHIP_ZK=1                  also register document-chip-zk (needs
+//	                                    DOCUMENT_CHIP_ANCHOR=1): the phone
+//	                                    proves the passport in zero knowledge
+//	DOCUMENT_CHIP_ZK_BB=<path>          Barretenberg CLI, bb 5.0.0 (default
+//	                                    "bb" on PATH; the Docker image ships
+//	                                    /usr/local/bin/bb)
+//	DOCUMENT_CHIP_ZK_ARTIFACTS_DIR=<d>  circuit artifacts + SRS built by
+//	                                    tools/zk-circuits/build.sh, served at
+//	                                    /v1/methods/document-chip-zk/artifacts/
+//	DOCUMENT_CHIP_ZK_ARTIFACTS_URL=<u>  or: where they are hosted instead
+//	DOCUMENT_CHIP_ZK_EXTRA_ROOTS=<r,..> registry roots to accept besides the
+//	                                    current one and zk/accepted_roots.json
+//
 // Documents enrolled through either method are unique per document via the
 // identifier-seed machinery (identifier.go, kind "document"). A face that
 // matches an identity enrolled with a different document is flagged for
@@ -43,6 +60,8 @@ import (
 type documentAnchorDeps struct {
 	known   *knownIdentifierHook
 	reviews documentchip.ReviewQueue
+	// zk is document-chip-zk, or nil when DOCUMENT_CHIP_ZK is not "1".
+	zk *documentchip.ZKMethod
 }
 
 // knownIdentifierHook lets the methods, built before the Server, ask the
@@ -66,6 +85,9 @@ func (h *knownIdentifierHook) call(ctx context.Context, identifier string) (bool
 // DOCUMENT_CHIP_ANCHOR is not "1".
 func documentAnchorFromEnv() (*documentchip.ChipMethod, *documentchip.QRMethod, *documentAnchorDeps, error) {
 	if os.Getenv("DOCUMENT_CHIP_ANCHOR") != "1" {
+		if os.Getenv("DOCUMENT_CHIP_ZK") == "1" {
+			return nil, nil, nil, errors.New("DOCUMENT_CHIP_ZK=1 needs DOCUMENT_CHIP_ANCHOR=1 (it shares document-chip's trust store, face index and review queue, and document-chip is the fallback the wallet offers)")
+		}
 		return nil, nil, nil, nil
 	}
 	if strings.TrimSpace(os.Getenv(IdentifierKeyEnv)) == "" {
@@ -118,8 +140,67 @@ func documentAnchorFromEnv() (*documentchip.ChipMethod, *documentchip.QRMethod, 
 	onReview := func(rc documentchip.ReviewCase) {
 		log.Printf(`{"severity":"NOTICE","message":"document anchor: face matches an identity enrolled with another document; queued for review","review_id":%q,"method":%q,"country":%q}`, rc.ID, rc.MethodID, rc.DocumentCountry)
 	}
-	return documentchip.NewChipMethod(cfg, onReview), documentchip.NewQRMethod(cfg, onReview),
-		&documentAnchorDeps{known: hook, reviews: reviews}, nil
+	deps := &documentAnchorDeps{known: hook, reviews: reviews}
+	if os.Getenv("DOCUMENT_CHIP_ZK") == "1" {
+		zk, err := documentZKFromEnv(cfg, onReview)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		deps.zk = zk
+	}
+	return documentchip.NewChipMethod(cfg, onReview), documentchip.NewQRMethod(cfg, onReview), deps, nil
+}
+
+// documentZKFromEnv builds document-chip-zk over the same trust store, face
+// index and review queue as document-chip.
+func documentZKFromEnv(cfg documentchip.Config, onReview func(documentchip.ReviewCase)) (*documentchip.ZKMethod, error) {
+	bb := firstNonEmpty(strings.TrimSpace(os.Getenv("DOCUMENT_CHIP_ZK_BB")), "bb")
+	bbPath, err := exec.LookPath(bb)
+	if err != nil {
+		return nil, fmt.Errorf("DOCUMENT_CHIP_ZK=1: Barretenberg CLI %q not found (DOCUMENT_CHIP_ZK_BB): %w", bb, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bbPath, "--version").Output()
+	if err != nil || !strings.Contains(string(out), documentchip.ZKBBVersion) {
+		return nil, fmt.Errorf("DOCUMENT_CHIP_ZK=1: %s is not bb %s (got %q, %v)", bbPath, documentchip.ZKBBVersion, strings.TrimSpace(string(out)), err)
+	}
+	circuits, vks, err := documentchip.LoadZKCircuits()
+	if err != nil {
+		return nil, err
+	}
+	if len(vks) == 0 {
+		return nil, errors.New("DOCUMENT_CHIP_ZK=1: no circuits pinned (run tools/zk-circuits/build.sh)")
+	}
+	reg, err := documentchip.BuildZKRegistry(cfg.Trust, time.Time{})
+	if err != nil {
+		return nil, err
+	}
+	var extra []string
+	if s := strings.TrimSpace(os.Getenv("DOCUMENT_CHIP_ZK_EXTRA_ROOTS")); s != "" {
+		extra = strings.Split(s, ",")
+	}
+	roots, err := documentchip.ZKAcceptedRoots(reg.RootBytes(), time.Now(), extra...)
+	if err != nil {
+		return nil, err
+	}
+	zc := documentchip.ZKConfig{
+		BB: bbPath, Registry: reg, Roots: roots, Circuits: circuits, VKs: vks,
+		PublicURL:        firstNonEmpty(os.Getenv("SERVER_PUBLIC_URL"), "http://localhost:8080"),
+		ArtifactsBaseURL: strings.TrimSpace(os.Getenv("DOCUMENT_CHIP_ZK_ARTIFACTS_URL")),
+	}
+	if dir := strings.TrimSpace(os.Getenv("DOCUMENT_CHIP_ZK_ARTIFACTS_DIR")); dir != "" && zc.ArtifactsBaseURL == "" {
+		zc.ArtifactsDir = os.DirFS(dir)
+		missing := documentchip.MissingZKArtifacts(zc.ArtifactsDir, circuits)
+		if len(missing) > 0 {
+			log.Printf("WARNING: document-chip-zk: %d artifacts missing or changed in %s (first: %s); passports that need them get zk_circuit_unsupported from the wallet", len(missing), dir, missing[0])
+		}
+	} else if zc.ArtifactsBaseURL == "" {
+		log.Printf("WARNING: DOCUMENT_CHIP_ZK=1 without DOCUMENT_CHIP_ZK_ARTIFACTS_DIR or _URL: wallets cannot download circuits")
+	}
+	log.Printf("document-chip-zk: %d circuits pinned; CSCA registry root %s (%d leaves, %d CSCAs without a circuit); bb %s",
+		len(vks), reg.Root, len(reg.Certificates), reg.Skipped, bbPath)
+	return documentchip.NewZKMethod(cfg, zc, onReview), nil
 }
 
 // wireDocumentAnchor connects the methods to this server's identifier store.
