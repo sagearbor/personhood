@@ -11,7 +11,12 @@
 //     where the private nullifier is Poseidon2(DG1, eContent, SOD signature);
 //     and the proof commits to 509 bytes of data (the parameter commitment),
 //     which the issuer sets to its session challenge and the holder's DID,
-//     so a bundle cannot be replayed into another session.
+//     so a bundle cannot be replayed into another session;
+//  5. aa:        Active Authentication, on the same passport (it opens the
+//     same commitment integrity opens): either EF.SOD lists no DG15
+//     (aa_absent), or it lists a DG15 whose key verified the chip's
+//     signature over this session's 8-byte AA challenge (aa_dg_…). The
+//     DG15 key and the signature stay private.
 //
 // The sub-proofs are linked by salted commitments: each one's output
 // commitment is the next one's public input. None of DG1, the document
@@ -57,8 +62,30 @@ const (
 	NullifierNone          = 4
 )
 
-// Stage names, in chain order.
-var Stages = []string{"dsc", "id", "integrity", "bind"}
+// Stage names: the chain dsc -> id -> integrity -> bind, and aa, which
+// branches off the id commitment next to integrity.
+var Stages = []string{"dsc", "id", "integrity", "bind", "aa"}
+
+// AAAbsentCircuit proves EF.SOD lists no DG15 (no Active Authentication
+// key on the chip). Every other aa_ circuit proves Active Authentication.
+const AAAbsentCircuit = "aa_absent"
+
+// AAChallengeSize is the length of an Active Authentication challenge
+// (RND.IFD, ICAO 9303 part 11).
+const AAChallengeSize = 8
+
+// AAChallenge derives the 8-byte Active Authentication challenge the chip
+// signs from the session challenge (the first 32 bytes of the bind data):
+// the leading 8 bytes of SHA-256("personhood/zk-aa/v1" 0x00 challenge).
+// Derived rather than separately random so one begin issues one challenge
+// for both proofs, and domain-separated so the chip never signs the raw
+// bind challenge.
+func AAChallenge(challenge [32]byte) [AAChallengeSize]byte {
+	h := sha256.Sum256(append([]byte("personhood/zk-aa/v1\x00"), challenge[:]...))
+	var c [AAChallengeSize]byte
+	copy(c[:], h[:AAChallengeSize])
+	return c
+}
 
 // BindCircuit is the one circuit accepted for the last stage.
 const BindCircuit = "bind"
@@ -107,7 +134,7 @@ type SubProof struct {
 
 // Bundle is what the wallet sends: one sub-proof per stage.
 type Bundle struct {
-	DSC, ID, Integrity, Bind SubProof
+	DSC, ID, Integrity, Bind, AA SubProof
 }
 
 // Result is what a verified bundle establishes.
@@ -123,6 +150,9 @@ type Result struct {
 	// CurrentDate is the date (unix seconds) the proof says the document was
 	// still valid on.
 	CurrentDate int64
+	// ActiveAuth is true when the chip proved Active Authentication (clone
+	// resistant); false when EF.SOD lists no DG15 (passive only).
+	ActiveAuth bool
 }
 
 // Identifier is the uniqueness identifier the issuer keys with
@@ -144,6 +174,11 @@ var (
 	ErrStaleDate       = errors.New("zkproof: proof's current_date is not today")
 	ErrMockDocument    = errors.New("zkproof: mock (test) document")
 	ErrBindMismatch    = errors.New("zkproof: proof is bound to another session")
+	// ErrAAMissing: no aa sub-proof. Without one the issuer cannot tell a
+	// chip without DG15 from a clone that left DG15 out, so it refuses.
+	ErrAAMissing = errors.New("zkproof: no Active Authentication sub-proof")
+	// ErrAAChallenge: the aa sub-proof answers another challenge.
+	ErrAAChallenge = errors.New("zkproof: Active Authentication answers another challenge")
 )
 
 // Verifier checks bundles.
@@ -170,7 +205,7 @@ type Verifier struct {
 }
 
 // public input counts per stage
-var wantInputs = map[string]int{"dsc": 2, "id": 2, "integrity": 2, "bind": 8}
+var wantInputs = map[string]int{"dsc": 2, "id": 2, "integrity": 2, "bind": 8, "aa": 2}
 
 func fields(sp SubProof, stage string) ([][FieldSize]byte, error) {
 	n := wantInputs[stage]
@@ -192,12 +227,16 @@ func small(f [FieldSize]byte) (int64, bool) {
 	return v.Int64(), v.IsInt64()
 }
 
-// Verify checks all four sub-proofs and the links between them, and that
-// the bind sub-proof commits to bindData (BindData of this session's
-// challenge and holder DID).
-func (v *Verifier) Verify(ctx context.Context, b Bundle, bindData [BindDataSize]byte) (Result, error) {
+// Verify checks all five sub-proofs and the links between them, that the
+// bind sub-proof commits to bindData (BindData of this session's challenge
+// and holder DID), and that the aa sub-proof answers aaChallenge
+// (AAChallenge of the same session challenge).
+func (v *Verifier) Verify(ctx context.Context, b Bundle, bindData [BindDataSize]byte, aaChallenge [AAChallengeSize]byte) (Result, error) {
 	var res Result
-	sps := []SubProof{b.DSC, b.ID, b.Integrity, b.Bind}
+	if b.AA.Circuit == "" && b.AA.Proof == nil && b.AA.PublicInputs == nil {
+		return res, ErrAAMissing
+	}
+	sps := []SubProof{b.DSC, b.ID, b.Integrity, b.Bind, b.AA}
 	pub := make([][][FieldSize]byte, len(sps))
 	for i, sp := range sps {
 		f, err := fields(sp, Stages[i])
@@ -206,7 +245,7 @@ func (v *Verifier) Verify(ctx context.Context, b Bundle, bindData [BindDataSize]
 		}
 		pub[i] = f
 	}
-	dsc, id, integ, exp := pub[0], pub[1], pub[2], pub[3]
+	dsc, id, integ, exp, aa := pub[0], pub[1], pub[2], pub[3], pub[4]
 
 	// Cheap checks first, before running bb.
 	// dsc:       [certificate_registry_root, comm_out]
@@ -214,7 +253,8 @@ func (v *Verifier) Verify(ctx context.Context, b Bundle, bindData [BindDataSize]
 	// integrity: [comm_in, comm_out]
 	// bind:      [comm_in, current_date, service_scope, service_subscope,
 	//             param_commitment, nullifier_type, nullifier, oprf_pk_hash]
-	if dsc[1] != id[0] || id[1] != integ[0] || integ[1] != exp[0] {
+	// aa:        [comm_in (= id's comm_out), aa_challenge]
+	if dsc[1] != id[0] || id[1] != integ[0] || integ[1] != exp[0] || id[1] != aa[0] {
 		return res, ErrChainBroken
 	}
 	if !v.Roots[dsc[0]] {
@@ -225,6 +265,11 @@ func (v *Verifier) Verify(ctx context.Context, b Bundle, bindData [BindDataSize]
 	}
 	if exp[4] != ParamCommitment(bindData) {
 		return res, ErrBindMismatch
+	}
+	var wantAA [FieldSize]byte
+	copy(wantAA[FieldSize-AAChallengeSize:], aaChallenge[:])
+	if aa[1] != wantAA {
+		return res, ErrAAChallenge
 	}
 	date, ok := small(exp[1])
 	now := time.Now
@@ -269,6 +314,7 @@ func (v *Verifier) Verify(ctx context.Context, b Bundle, bindData [BindDataSize]
 	res.Nullifier = exp[6]
 	res.NullifierType = nt
 	res.CurrentDate = date
+	res.ActiveAuth = b.AA.Circuit != AAAbsentCircuit
 	return res, nil
 }
 
@@ -279,6 +325,7 @@ func circuitMatchesStage(name, stage string) bool {
 		"dsc":       "sig_check_dsc_",
 		"id":        "sig_check_id_data_",
 		"integrity": "data_check_integrity_",
+		"aa":        "aa_",
 	}[stage]
 	if stage == "bind" {
 		return name == BindCircuit

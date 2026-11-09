@@ -28,6 +28,9 @@ const testHolderDID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
 
 var testBind = BindData(testChallenge, testHolderDID)
 
+// The aa fixtures (spikes/zk-passport/aa-fixtures.mjs) answer this challenge.
+var testAA = AAChallenge(testChallenge)
+
 //
 // The tests need the bb binary. They look for it in $BB, then on PATH as
 // "bb", then in spikes/zk-passport/node_modules (npm install there). Without
@@ -97,7 +100,7 @@ func load(t *testing.T, vector string) (*Verifier, Bundle) {
 		v.VKs[m.Circuits[st]] = read(st, "vk")
 		sp[st] = SubProof{Circuit: m.Circuits[st], Proof: read(st, "proof"), PublicInputs: read(st, "public_inputs")}
 	}
-	b := Bundle{DSC: sp["dsc"], ID: sp["id"], Integrity: sp["integrity"], Bind: sp["bind"]}
+	b := Bundle{DSC: sp["dsc"], ID: sp["id"], Integrity: sp["integrity"], Bind: sp["bind"], AA: sp["aa"]}
 	// The proof states the date it was made; pin the clock to it.
 	date, _ := small(([FieldSize]byte)(b.Bind.PublicInputs[FieldSize : 2*FieldSize]))
 	v.Now = func() time.Time { return time.Unix(date, 0).Add(time.Hour) }
@@ -109,11 +112,15 @@ func TestVerifyVectors(t *testing.T) {
 		t.Run(vec, func(t *testing.T) {
 			v, b := load(t, vec)
 			start := time.Now()
-			res, err := v.Verify(context.Background(), b, testBind)
+			res, err := v.Verify(context.Background(), b, testBind, testAA)
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
-			t.Logf("verified 4 sub-proofs in %v; identifier %s", time.Since(start), res.Identifier())
+			// rsa-pss lists DG15 (RSA-1024 AA key); p256 has none.
+			if want := vec == "rsa-pss"; res.ActiveAuth != want {
+				t.Errorf("ActiveAuth = %v, want %v", res.ActiveAuth, want)
+			}
+			t.Logf("verified 5 sub-proofs in %v; identifier %s", time.Since(start), res.Identifier())
 			if res.NullifierType != NullifierNonSalted {
 				t.Errorf("nullifier type %d", res.NullifierType)
 			}
@@ -137,42 +144,76 @@ func TestVerifyRejects(t *testing.T) {
 		mut  func(v *Verifier, b *Bundle)
 		want error
 		bind *[BindDataSize]byte
+		vec  string
 	}{
 		{"tampered nullifier", func(_ *Verifier, b *Bundle) {
 			b.Bind.PublicInputs = flip(b.Bind.PublicInputs, 6*FieldSize+31)
-		}, ErrProofInvalid, nil},
+		}, ErrProofInvalid, nil, ""},
 		{"tampered param commitment", func(_ *Verifier, b *Bundle) {
 			b.Bind.PublicInputs = flip(b.Bind.PublicInputs, 4*FieldSize+31)
-		}, ErrBindMismatch, nil},
-		{"tampered proof", func(_ *Verifier, b *Bundle) { b.ID.Proof = flip(b.ID.Proof, 1000) }, ErrProofInvalid, nil},
-		{"registry root not published", func(v *Verifier, _ *Bundle) { v.Roots = map[[FieldSize]byte]bool{} }, ErrRegistryUnknown, nil},
-		{"other scope", func(v *Verifier, _ *Bundle) { v.Scope[31] ^= 1 }, ErrScope, nil},
+		}, ErrBindMismatch, nil, ""},
+		{"tampered proof", func(_ *Verifier, b *Bundle) { b.ID.Proof = flip(b.ID.Proof, 1000) }, ErrProofInvalid, nil, ""},
+		{"registry root not published", func(v *Verifier, _ *Bundle) { v.Roots = map[[FieldSize]byte]bool{} }, ErrRegistryUnknown, nil, ""},
+		{"other scope", func(v *Verifier, _ *Bundle) { v.Scope[31] ^= 1 }, ErrScope, nil, ""},
 		{"stale date", func(v *Verifier, _ *Bundle) {
 			v.Now = func() time.Time { return time.Now().Add(72 * time.Hour) }
-		}, ErrStaleDate, nil},
-		{"untrusted vk", func(v *Verifier, b *Bundle) { delete(v.VKs, b.DSC.Circuit) }, ErrUnknownCircuit, nil},
-		{"bind vk used for dsc", func(v *Verifier, b *Bundle) { b.DSC.Circuit = BindCircuit }, ErrUnknownCircuit, nil},
-		{"stage swap", func(_ *Verifier, b *Bundle) { b.ID, b.Integrity = b.Integrity, b.ID }, ErrChainBroken, nil},
+		}, ErrStaleDate, nil, ""},
+		{"untrusted vk", func(v *Verifier, b *Bundle) { delete(v.VKs, b.DSC.Circuit) }, ErrUnknownCircuit, nil, ""},
+		{"bind vk used for dsc", func(v *Verifier, b *Bundle) { b.DSC.Circuit = BindCircuit }, ErrUnknownCircuit, nil, ""},
+		{"stage swap", func(_ *Verifier, b *Bundle) { b.ID, b.Integrity = b.Integrity, b.ID }, ErrChainBroken, nil, ""},
 		{"other session challenge", func(*Verifier, *Bundle) {}, ErrBindMismatch, func() *[BindDataSize]byte {
 			c := testChallenge
 			c[0] ^= 1
 			d := BindData(c, testHolderDID)
 			return &d
-		}()},
+		}(), ""},
 		{"other holder DID", func(*Verifier, *Bundle) {}, ErrBindMismatch, func() *[BindDataSize]byte {
 			d := BindData(testChallenge, testHolderDID+"x")
 			return &d
-		}()},
+		}(), ""},
+		// Active Authentication
+		{"aa missing (a clone leaving DG15 out)", func(_ *Verifier, b *Bundle) { b.AA = SubProof{} }, ErrAAMissing, nil, "rsa-pss"},
+		{"aa answers another challenge (old session)", func(v *Verifier, b *Bundle) {
+			b.AA = loadStage(t, "rsa-pss", "aa-wrong-challenge", b.AA.Circuit)
+		}, ErrAAChallenge, nil, "rsa-pss"},
+		{"old-session aa with its challenge rewritten to this one", func(_ *Verifier, b *Bundle) {
+			b.AA = loadStage(t, "rsa-pss", "aa-wrong-challenge", b.AA.Circuit)
+			copy(b.AA.PublicInputs[2*FieldSize-AAChallengeSize:], testAA[:])
+		}, ErrProofInvalid, nil, "rsa-pss"},
+		{"aa proof tampered", func(_ *Verifier, b *Bundle) { b.AA.Proof = flip(b.AA.Proof, 2000) }, ErrProofInvalid, nil, "rsa-pss"},
+		{"aa of another passport", func(_ *Verifier, b *Bundle) {
+			_, other := load(t, "p256")
+			b.AA = other.AA
+		}, ErrChainBroken, nil, "rsa-pss"},
+		{"aa vk not pinned", func(v *Verifier, b *Bundle) { delete(v.VKs, b.AA.Circuit) }, ErrUnknownCircuit, nil, "rsa-pss"},
+		{"aa proof under another stage's name", func(_ *Verifier, b *Bundle) { b.AA.Circuit = BindCircuit }, ErrUnknownCircuit, nil, "rsa-pss"},
+		{"aa_absent name on a DG15 proof", func(v *Verifier, b *Bundle) {
+			// The vk decides: the absent circuit's key does not verify an AA proof.
+			_, other := load(t, "p256")
+			v.VKs[AAAbsentCircuit] = mustVK(t, "p256", "aa")
+			b.AA.Circuit = other.AA.Circuit
+		}, ErrProofInvalid, nil, "rsa-pss"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v, b := load(t, "p256")
+			vec := tc.vec
+			if vec == "" {
+				vec = "p256"
+			}
+			v, b := load(t, vec)
 			tc.mut(v, &b)
 			bind := testBind
 			if tc.bind != nil {
 				bind = *tc.bind
 			}
-			if _, err := v.Verify(ctx, b, bind); !errors.Is(err, tc.want) {
+			_, err := v.Verify(ctx, b, bind, testAA)
+			if tc.want == nil {
+				if err == nil {
+					t.Fatal("accepted")
+				}
+				return
+			}
+			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
 		})
@@ -183,7 +224,7 @@ func TestVerifyRejects(t *testing.T) {
 		v, b := load(t, "p256")
 		_, other := load(t, "rsa-pss")
 		b.Bind = other.Bind
-		if _, err := v.Verify(ctx, b, testBind); !errors.Is(err, ErrChainBroken) {
+		if _, err := v.Verify(ctx, b, testBind, testAA); !errors.Is(err, ErrChainBroken) {
 			t.Fatalf("got %v", err)
 		}
 	})
@@ -199,3 +240,43 @@ func TestServiceScopeIsStable(t *testing.T) {
 }
 
 const wantScopeHex = "28a6676ad15b10f2b78fb5f1e25cd20c68e5d4611ecf6b364df8427d0c69edfe"
+
+func loadStage(t *testing.T, vector, dir, circuit string) SubProof {
+	t.Helper()
+	read := func(f string) []byte {
+		b, err := os.ReadFile(filepath.Join("testdata", vector, dir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	return SubProof{Circuit: circuit, Proof: read("proof"), PublicInputs: read("public_inputs")}
+}
+
+func mustVK(t *testing.T, vector, stage string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", vector, stage, "vk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestAAChallengeIsStable(t *testing.T) {
+	// The wallet hands this to the chip; it must not drift between issuer
+	// and fixtures (spikes/zk-passport/aa-fixtures.mjs).
+	got := AAChallenge(testChallenge)
+	raw, err := os.ReadFile(filepath.Join("testdata", "rsa-pss", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		AAChallenge string `json:"aa_challenge"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if "0x"+hex.EncodeToString(got[:]) != m.AAChallenge {
+		t.Fatalf("AAChallenge = %x, fixtures used %s", got, m.AAChallenge)
+	}
+}

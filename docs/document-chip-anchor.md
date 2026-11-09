@@ -197,6 +197,10 @@ on Aadhaar QRs made after February 2026.**
 
 ## Zero-knowledge variant
 
-`document-chip-zk` (design and spike in docs/zk-passport.md) proves the
-same passive-authentication facts on the phone, so DG1 never reaches the
-issuer.
+`document-chip-zk` (design in docs/zk-passport.md) proves the same
+passive-authentication facts, and Active Authentication when the chip has
+DG15, on the phone, so DG1, DG15 and the AA signature never reach the
+issuer. Same strengths (80 with AA, 70 without DG15) and the same clone rule
+(EF.SOD lists DG15 but no AA: refused, routed). The OpenLine wallet uses only
+the zero-knowledge method for passports; this method stays available to
+other clients and is off on the live issuer.

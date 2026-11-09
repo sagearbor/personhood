@@ -205,8 +205,8 @@ func TestIntegration_DocumentChipZK_Wiring(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, ok := deps.Registry.Get(documentchip.ZKMethodID)
-	if !ok || m.Metadata().Strength != 70 || m.Metadata().Type != types.MethodTypeAnchor {
-		t.Fatal("document-chip-zk not registered as a strength-70 anchor")
+	if !ok || m.Metadata().Strength != 80 || m.Metadata().Type != types.MethodTypeAnchor {
+		t.Fatal("document-chip-zk not registered as an anchor of strength up to 80")
 	}
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	srv, err := NewServer(Config{
@@ -259,6 +259,9 @@ func TestIntegration_DocumentChipZK_Wiring(t *testing.T) {
 	if s, _ := begin.Challenge.Payload["bind_data_hex"].(string); len(s) != 2*509 {
 		t.Fatalf("bind data %v", begin.Challenge.Payload["bind_data_hex"])
 	}
+	if s, _ := begin.Challenge.Payload["aa_challenge_hex"].(string); len(s) != 16 {
+		t.Fatalf("aa challenge %v", begin.Challenge.Payload["aa_challenge_hex"])
+	}
 	proofs := map[string]any{}
 	dir := "../methods/document-chip/zkproof/testdata/rsa-pss"
 	var fm struct {
@@ -266,7 +269,7 @@ func TestIntegration_DocumentChipZK_Wiring(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	_ = json.Unmarshal(raw, &fm)
-	for _, st := range []string{"dsc", "id", "integrity", "bind"} {
+	for _, st := range []string{"dsc", "id", "integrity", "bind", "aa"} {
 		p, _ := os.ReadFile(filepath.Join(dir, st, "proof"))
 		pi, _ := os.ReadFile(filepath.Join(dir, st, "public_inputs"))
 		proofs[st] = map[string]any{"circuit": fm.Circuits[st], "proof_b64": base64.StdEncoding.EncodeToString(p), "public_inputs_b64": base64.StdEncoding.EncodeToString(pi)}

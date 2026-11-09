@@ -150,7 +150,7 @@ func clonePayload(p map[string]any) map[string]any {
 func TestZKMetadata(t *testing.T) {
 	c := newZK(t, "rsa-pss", Config{})
 	md := c.m.Metadata()
-	if md.ID != ZKMethodID || md.Strength != 70 || md.Type != types.MethodTypeAnchor {
+	if md.ID != ZKMethodID || md.Strength != 80 || md.Type != types.MethodTypeAnchor {
 		t.Fatalf("metadata %+v", md)
 	}
 	if ok, _ := c.m.IsAvailableForUser(types.UserContext{Platform: "web"}); ok {
@@ -168,6 +168,10 @@ func TestZKBeginPayload(t *testing.T) {
 	want := zkproof.BindData(zkTestChallenge, zkTestHolder)
 	if p["bind_data_hex"] != hex.EncodeToString(want[:]) {
 		t.Fatalf("bind data %v", p["bind_data_hex"])
+	}
+	aa := zkproof.AAChallenge(zkTestChallenge)
+	if p["aa_challenge_hex"] != hex.EncodeToString(aa[:]) || len(aa) != 8 {
+		t.Fatalf("aa challenge %v", p["aa_challenge_hex"])
 	}
 	scope := zkproof.ServiceScope()
 	if p["service_scope"] != "0x"+hex.EncodeToString(scope[:]) {
@@ -193,6 +197,12 @@ func TestZKEnrolls(t *testing.T) {
 			}
 			if !strings.HasPrefix(res.VerifiedIdentifier, "chip:ZK:") || !IsDocumentIdentifier(res.VerifiedIdentifier) {
 				t.Fatalf("identifier %q", res.VerifiedIdentifier)
+			}
+			// rsa-pss proves Active Authentication (80); p256 has no DG15
+			// and enrolls passive-only (70), never refused for it.
+			want := map[string]int{"rsa-pss": 80, "p256": 70}[vector]
+			if got := types.EffectiveStrength(c.m.Metadata(), res); got != want {
+				t.Fatalf("strength %d, want %d", got, want)
 			}
 			// Same passport, new session (a re-enrollment): same identifier.
 			// The fixture proof is bound to the challenge, which the test
@@ -237,6 +247,19 @@ func TestZKRefusals(t *testing.T) {
 		{"challenge from another session", func(c *zkCeremony, _ map[string]any) {
 			c.m.random = func(b []byte) error { b[0] = 1; return nil }
 		}, "zk_bind_mismatch"},
+		// Active Authentication: EF.SOD lists DG15 (rsa-pss), so leaving the
+		// aa proof out is the clone signal.
+		{"aa proof missing", func(_ *zkCeremony, p map[string]any) { delete(p["proofs"].(map[string]any), "aa") }, "zk_aa_missing"},
+		{"aa answers an old challenge", func(_ *zkCeremony, p map[string]any) {
+			p["proofs"].(map[string]any)["aa"] = zkStage(t, "rsa-pss", "aa-wrong-challenge", "aa_dg_sha256_rsa_1024_sha1")
+		}, "zk_aa_mismatch"},
+		{"aa of another passport", func(_ *zkCeremony, p map[string]any) {
+			other := loadZKFixture(t, "p256")
+			p["proofs"].(map[string]any)["aa"] = other.payload["proofs"].(map[string]any)["aa"]
+		}, "zk_chain_broken"},
+		{"aa malformed", func(_ *zkCeremony, p map[string]any) {
+			p["proofs"].(map[string]any)["aa"] = map[string]any{"circuit": "aa_absent"}
+		}, "zk_bundle_malformed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -437,5 +460,33 @@ func TestZKHTTPHandlers(t *testing.T) {
 	}
 	if m := MissingZKArtifacts(c.m.zk.ArtifactsDir, c.m.zk.Circuits); len(m) != 2 {
 		t.Fatalf("hash mismatches not reported: %v", m)
+	}
+}
+
+func zkStage(t *testing.T, vector, dir, circuit string) map[string]any {
+	t.Helper()
+	read := func(n string) []byte {
+		b, err := os.ReadFile(filepath.Join("zkproof", "testdata", vector, dir, n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	return zkEncodeSubProof(zkproof.SubProof{Circuit: circuit, Proof: read("proof"), PublicInputs: read("public_inputs")})
+}
+
+// The aa fixtures must be proofs for the circuits the issuer pins: same
+// verification key as zk/vks (tools/zk-circuits/build.sh is reproducible).
+func TestZKAAFixturesUsePinnedCircuits(t *testing.T) {
+	_, vks, err := LoadZKCircuits()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, vector := range []string{"p256", "rsa-pss"} {
+		fix := loadZKFixture(t, vector)
+		name := fix.manifest.Circuits["aa"]
+		if string(fix.vks[name]) != string(vks[name]) {
+			t.Errorf("%s: fixture vk for %s differs from the pinned one", vector, name)
+		}
 	}
 }

@@ -135,7 +135,7 @@ func (s *FirestoreSessionStore) RecordMethodResult(sessionID string, result type
 		if vm.MethodID == result.MethodID {
 			rec.VerifiedMethods[i] = types.VerifiedMethod{
 				MethodID:          result.MethodID,
-				Strength:          metadata.Strength,
+				Strength:          types.EffectiveStrength(metadata, result),
 				VerifiedAt:        result.VerifiedAt,
 				FreshnessLifetime: metadata.FreshnessLifetime,
 				AttestationDigest: result.AttestationDigest,
@@ -147,7 +147,7 @@ func (s *FirestoreSessionStore) RecordMethodResult(sessionID string, result type
 	if !replaced {
 		rec.VerifiedMethods = append(rec.VerifiedMethods, types.VerifiedMethod{
 			MethodID:          result.MethodID,
-			Strength:          metadata.Strength,
+			Strength:          types.EffectiveStrength(metadata, result),
 			VerifiedAt:        result.VerifiedAt,
 			FreshnessLifetime: metadata.FreshnessLifetime,
 			AttestationDigest: result.AttestationDigest,
