@@ -263,3 +263,27 @@ func BuildDIDDocument(issuerDID types.DID, keyFragment string, pub ed25519.Publi
 		AssertionMethod: []string{vmID},
 	}, nil
 }
+
+// PQKeyFragment names the issuer's ML-DSA-65 verification method
+// ("<did>#key-pq-1").
+const PQKeyFragment = "key-pq-1"
+
+// AddPQKey appends the issuer's ML-DSA-65 public key as a second
+// verification method, AFTER the Ed25519 key, so verifiers that take the
+// first entry keep finding Ed25519. The key is a JWK with kty "AKP" and alg
+// "ML-DSA-65" (IETF draft-ietf-cose-dilithium); experimental, see
+// docs/POST_QUANTUM.md.
+func (d *IssuerDIDDocument) AddPQKey(issuerDID types.DID, keyFragment string, pub []byte) {
+	vmID := IssuerVerificationMethod(issuerDID, keyFragment)
+	d.VerificationMethod = append(d.VerificationMethod, IssuerVerificationEntry{
+		ID:         vmID,
+		Type:       "JsonWebKey2020",
+		Controller: issuerDID,
+		PublicKeyJwk: map[string]interface{}{
+			"kty": "AKP",
+			"alg": "ML-DSA-65",
+			"pub": base64.RawURLEncoding.EncodeToString(pub),
+		},
+	})
+	d.AssertionMethod = append(d.AssertionMethod, vmID)
+}

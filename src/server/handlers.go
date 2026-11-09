@@ -146,6 +146,10 @@ type serverConfigResponse struct {
 	NoFalseLockout       bool  `json:"no_false_lockout"`
 	ManualReview         bool  `json:"manual_review"`
 	RecoveryDelaySeconds int64 `json:"recovery_delay_seconds,omitempty"`
+
+	// PQProof reports whether credentials carry an ML-DSA-65 signature in
+	// proof.pqProof next to the Ed25519 one (ISSUER_MLDSA_SK set).
+	PQProof bool `json:"pq_proof"`
 }
 
 // issueCredentialRequest is the JSON body of POST /v1/credentials/issue.
@@ -189,6 +193,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		NoFalseLockout:          s.lockout != nil,
 		ManualReview:            s.reviewsEnabled(),
 		RecoveryDelaySeconds:    recoveryDelaySeconds(s),
+		PQProof:                 s.issuerPQPublicKey != nil,
 	})
 }
 
@@ -776,6 +781,9 @@ func (s *Server) handleDIDDocument(w http.ResponseWriter, _ *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "did_build_failed", err.Error())
 		return
+	}
+	if s.issuerPQPublicKey != nil {
+		doc.AddPQKey(s.issuerDID, PQKeyFragment, s.issuerPQPublicKey)
 	}
 	w.Header().Set("Content-Type", "application/did+json")
 	if err := json.NewEncoder(w).Encode(doc); err != nil {

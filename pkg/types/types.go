@@ -221,6 +221,33 @@ type Proof struct {
 	// ProofValue is the multibase-encoded Ed25519 signature over the
 	// canonicalized credential.
 	ProofValue string `json:"proofValue"`
+
+	// PQProof is an optional second, post-quantum signature (ML-DSA-65,
+	// FIPS 204) over the same signing input as ProofValue. It sits inside
+	// Proof because the signing input is the credential with "proof"
+	// removed: verifiers that predate it never see it, and their Ed25519
+	// check is unchanged. See docs/POST_QUANTUM.md.
+	PQProof *PQProof `json:"pqProof,omitempty"`
+}
+
+// PQProof is the post-quantum companion signature carried in
+// Proof.PQProof. Experimental: the shape follows W3C Data Integrity
+// (type + cryptosuite), but the cryptosuite name is Personhood's own, not
+// a registered one.
+type PQProof struct {
+	// Type is always "DataIntegrityProof".
+	Type string `json:"type"`
+
+	// Cryptosuite names the algorithm and canonicalization, e.g.
+	// "mldsa65-jcs-personhood-v1".
+	Cryptosuite string `json:"cryptosuite"`
+
+	// VerificationMethod is the absolute URL of the issuer's ML-DSA public
+	// key in its DID document.
+	VerificationMethod string `json:"verificationMethod"`
+
+	// ProofValue is the base64url (no padding) ML-DSA signature.
+	ProofValue string `json:"proofValue"`
 }
 
 // PersonhoodCredential is the user-facing W3C Verifiable Credential issued by

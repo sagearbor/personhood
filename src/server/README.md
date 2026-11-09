@@ -136,6 +136,12 @@ show the user what mode they are in.
   credential is bound to it, so nobody can get a credential bound to a key
   they don't hold. Checked whenever sent; required only with
   `REQUIRE_HOLDER_POP=1` (off until the OpenLine wallet sends it).
+- **Post-quantum companion signature (experimental, off by default)**: with
+  `ISSUER_MLDSA_SK` (base64 32-byte seed) set, every credential also carries
+  an ML-DSA-65 signature in `proof.pqProof`, the DID document publishes the
+  key as `#key-pq-1` after the Ed25519 key, and `/v1/config` reports
+  `pq_proof: true`. Verifiers that ignore `pqProof` are unaffected. See
+  `docs/POST_QUANTUM.md`.
 
 ## Tests
 
