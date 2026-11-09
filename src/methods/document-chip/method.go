@@ -441,7 +441,8 @@ func (m *QRMethod) CompleteCeremony(ctx context.Context, cc types.CeremonyContex
 func (m *QRMethod) HealthCheck(_ context.Context) error { return nil }
 
 // IsDocumentIdentifier reports whether s has the shape this package's
-// identifiers have ("chip:CC:<64 hex>" or "qr:CC-doc:<64 hex>").
+// identifiers have ("chip:CC:<64 hex>", "qr:CC-doc:<64 hex>", or
+// "mdoc:ZK:<64 hex>" from mobile-id-zk).
 func IsDocumentIdentifier(s string) bool {
 	var rest string
 	switch {
@@ -449,6 +450,8 @@ func IsDocumentIdentifier(s string) bool {
 		rest = s[len("chip:"):]
 	case strings.HasPrefix(s, "qr:"):
 		rest = s[len("qr:"):]
+	case strings.HasPrefix(s, "mdoc:"):
+		rest = s[len("mdoc:"):]
 	default:
 		return false
 	}

@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
@@ -16,7 +19,9 @@ import (
 	"github.com/sagearbor/personhood/pkg/firestoreclient"
 	"github.com/sagearbor/personhood/pkg/redisclient"
 	documentchip "github.com/sagearbor/personhood/src/methods/document-chip"
+	"github.com/sagearbor/personhood/src/methods/document-chip/mdoczk"
 	"github.com/sagearbor/personhood/src/methods/document-chip/signedqr"
+	"github.com/sagearbor/personhood/src/methods/document-chip/zkproof"
 	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
 )
 
@@ -51,7 +56,32 @@ import (
 //	DOCUMENT_CHIP_ZK_EXTRA_ROOTS=<r,..> registry roots to accept besides the
 //	                                    current one and zk/accepted_roots.json
 //
-// Documents enrolled through either method are unique per document via the
+// Private mobile ID (docs/mobile-id.md), on top of DOCUMENT_CHIP_ANCHOR=1:
+//
+//	MOBILE_ID_ZK=1                      also register mobile-id-zk: a
+//	                                    government mobile ID (ISO 18013-5
+//	                                    mdoc, e.g. a US state mobile driving
+//	                                    licence) proved in zero knowledge on
+//	                                    the phone
+//	MOBILE_ID_IACA_PEM=<file>           the issuing authorities (IACA root
+//	                                    certificates, PEM) to trust; required.
+//	                                    No list is embedded: AAMVA's VICAL may
+//	                                    not be redistributed, so the operator
+//	                                    supplies state-published IACAs
+//	MOBILE_ID_IACA_JURISDICTIONS=<file> optional JSON {cert SHA-256 hex: code}
+//	                                    for IACAs whose subject lacks C/ST
+//	MOBILE_ID_ZK_BB=<path>              bb 5.0.0 (default DOCUMENT_CHIP_ZK_BB,
+//	                                    then "bb")
+//	MOBILE_ID_ZK_ARTIFACTS_DIR=<d>      circuits + SRS from
+//	                                    tools/zk-circuits/mdoc/build.sh
+//	MOBILE_ID_ZK_ARTIFACTS_URL=<u>      or: where they are hosted instead
+//	MOBILE_ID_ZK_EXTRA_ROOTS=<r,..>     registry roots to accept besides the
+//	                                    current one (after an IACA change)
+//	MOBILE_ID_ZK_ORIGINS=<o,..>         accepted session-transcript origins
+//	                                    (the app's android:apk-key-hash:...);
+//	                                    empty accepts any
+//
+// Documents enrolled through any of these methods are unique per document via the
 // identifier-seed machinery (identifier.go, kind "document"). A face that
 // matches an identity enrolled with a different document is flagged for
 // review (GET /v1/admin/document-reviews), never refused.
@@ -62,6 +92,8 @@ type documentAnchorDeps struct {
 	reviews documentchip.ReviewQueue
 	// zk is document-chip-zk, or nil when DOCUMENT_CHIP_ZK is not "1".
 	zk *documentchip.ZKMethod
+	// mobileID is mobile-id-zk, or nil when MOBILE_ID_ZK is not "1".
+	mobileID *documentchip.MobileIDMethod
 }
 
 // knownIdentifierHook lets the methods, built before the Server, ask the
@@ -85,6 +117,9 @@ func (h *knownIdentifierHook) call(ctx context.Context, identifier string) (bool
 // DOCUMENT_CHIP_ANCHOR is not "1".
 func documentAnchorFromEnv() (*documentchip.ChipMethod, *documentchip.QRMethod, *documentAnchorDeps, error) {
 	if os.Getenv("DOCUMENT_CHIP_ANCHOR") != "1" {
+		if os.Getenv("MOBILE_ID_ZK") == "1" {
+			return nil, nil, nil, errors.New("MOBILE_ID_ZK=1 needs DOCUMENT_CHIP_ANCHOR=1 (it shares the document identifier keying, face index and review queue, so a person with a passport and a mobile ID is noticed)")
+		}
 		if os.Getenv("DOCUMENT_CHIP_ZK") == "1" {
 			return nil, nil, nil, errors.New("DOCUMENT_CHIP_ZK=1 needs DOCUMENT_CHIP_ANCHOR=1 (it shares document-chip's trust store, face index and review queue, and document-chip is the fallback the wallet offers)")
 		}
@@ -148,6 +183,13 @@ func documentAnchorFromEnv() (*documentchip.ChipMethod, *documentchip.QRMethod, 
 		}
 		deps.zk = zk
 	}
+	if os.Getenv("MOBILE_ID_ZK") == "1" {
+		mid, err := mobileIDFromEnv(cfg, onReview)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		deps.mobileID = mid
+	}
 	return documentchip.NewChipMethod(cfg, onReview), documentchip.NewQRMethod(cfg, onReview), deps, nil
 }
 
@@ -207,6 +249,83 @@ func documentZKFromEnv(cfg documentchip.Config, onReview func(documentchip.Revie
 		log.Printf("document-chip-zk: linking every enrollment to OpenLine chain %q", zc.LinkChainID)
 	}
 	return documentchip.NewZKMethod(cfg, zc, onReview), nil
+}
+
+// mobileIDFromEnv builds mobile-id-zk over the same face index and review
+// queue as the passport methods.
+func mobileIDFromEnv(cfg documentchip.Config, onReview func(documentchip.ReviewCase)) (*documentchip.MobileIDMethod, error) {
+	bb := firstNonEmpty(strings.TrimSpace(os.Getenv("MOBILE_ID_ZK_BB")), strings.TrimSpace(os.Getenv("DOCUMENT_CHIP_ZK_BB")), "bb")
+	bbPath, err := exec.LookPath(bb)
+	if err != nil {
+		return nil, fmt.Errorf("MOBILE_ID_ZK=1: Barretenberg CLI %q not found (MOBILE_ID_ZK_BB): %w", bb, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bbPath, "--version").Output()
+	if err != nil || !strings.Contains(string(out), documentchip.ZKBBVersion) {
+		return nil, fmt.Errorf("MOBILE_ID_ZK=1: %s is not bb %s (got %q, %v)", bbPath, documentchip.ZKBBVersion, strings.TrimSpace(string(out)), err)
+	}
+	pemFile := strings.TrimSpace(os.Getenv("MOBILE_ID_IACA_PEM"))
+	if pemFile == "" {
+		return nil, errors.New("MOBILE_ID_ZK=1 needs MOBILE_ID_IACA_PEM (the IACA root certificates to trust)")
+	}
+	raw, err := os.ReadFile(pemFile)
+	if err != nil {
+		return nil, fmt.Errorf("MOBILE_ID_IACA_PEM: %w", err)
+	}
+	certs, bad := mdoczk.ParsePEMCertificates(raw)
+	override := map[string]string{}
+	if f := strings.TrimSpace(os.Getenv("MOBILE_ID_IACA_JURISDICTIONS")); f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("MOBILE_ID_IACA_JURISDICTIONS: %w", err)
+		}
+		if err := json.Unmarshal(b, &override); err != nil {
+			return nil, fmt.Errorf("MOBILE_ID_IACA_JURISDICTIONS: %w", err)
+		}
+	}
+	reg, err := mdoczk.BuildRegistry(certs, override)
+	if err != nil {
+		return nil, err
+	}
+	if len(reg.Entries) == 0 {
+		return nil, fmt.Errorf("MOBILE_ID_IACA_PEM: no usable IACA (P-256 with a jurisdiction) in %s", pemFile)
+	}
+	roots := map[[zkproof.FieldSize]byte]bool{reg.RootBytes(): true}
+	for _, r := range splitCSV(os.Getenv("MOBILE_ID_ZK_EXTRA_ROOTS")) {
+		x, ok := new(big.Int).SetString(strings.TrimPrefix(r, "0x"), 16)
+		if !ok {
+			return nil, fmt.Errorf("MOBILE_ID_ZK_EXTRA_ROOTS: %q is not a hex field", r)
+		}
+		roots[zkproof.FieldBytes(x)] = true
+	}
+	circuits, vks, err := documentchip.LoadMobileIDCircuits()
+	if err != nil {
+		return nil, err
+	}
+	// The attestation digest is keyed per licence (stable, so
+	// RECOVERY_DOCUMENT_METHODS can list mobile-id-zk) with a key derived
+	// from IDENTIFIER_HMAC_KEY, never the raw nullifier.
+	dk := hmac.New(sha256.New, []byte(os.Getenv(IdentifierKeyEnv)))
+	dk.Write([]byte("mobile-id-zk attestation digest key"))
+	mc := documentchip.MobileIDConfig{
+		BB: bbPath, Registry: reg, Roots: roots, Circuits: circuits, VKs: vks,
+		PublicURL:        firstNonEmpty(os.Getenv("SERVER_PUBLIC_URL"), "http://localhost:8080"),
+		ArtifactsBaseURL: strings.TrimSpace(os.Getenv("MOBILE_ID_ZK_ARTIFACTS_URL")),
+		AllowedOrigins:   splitCSV(os.Getenv("MOBILE_ID_ZK_ORIGINS")),
+		DigestKey:        dk.Sum(nil),
+	}
+	if dir := strings.TrimSpace(os.Getenv("MOBILE_ID_ZK_ARTIFACTS_DIR")); dir != "" && mc.ArtifactsBaseURL == "" {
+		mc.ArtifactsDir = os.DirFS(dir)
+		if missing := documentchip.MissingZKArtifacts(mc.ArtifactsDir, circuits); len(missing) > 0 {
+			log.Printf("WARNING: mobile-id-zk: %d artifacts missing or changed in %s (first: %s)", len(missing), dir, missing[0])
+		}
+	} else if mc.ArtifactsBaseURL == "" {
+		log.Printf("WARNING: MOBILE_ID_ZK=1 without MOBILE_ID_ZK_ARTIFACTS_DIR or _URL: wallets cannot download circuits")
+	}
+	log.Printf("mobile-id-zk: %d circuits pinned; IACA registry root %s (%d IACAs, %d skipped, %d unparsed); bb %s",
+		len(vks), reg.Root, len(reg.Entries), reg.Skipped, bad, bbPath)
+	return documentchip.NewMobileIDMethod(cfg, mc, onReview), nil
 }
 
 // wireDocumentAnchor connects the methods to this server's identifier store.

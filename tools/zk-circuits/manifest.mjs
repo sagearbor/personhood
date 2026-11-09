@@ -87,7 +87,7 @@ for (let n = 1 << 17; n <= points; n *= 2) prefixes[n] = sha256(srs.subarray(0, 
 
 const manifest = {
   version: 1,
-  toolchain: { noir: "1.0.0-beta.22", bb: "5.0.0", circuits: `zkpassport/circuits@${commit}`, verifier_target: TARGET },
+  toolchain: { noir: "1.0.0-beta.22", bb: "5.0.0", circuits: process.env.CIRCUITS_LABEL ?? `zkpassport/circuits@${commit}`, verifier_target: TARGET },
   srs: { g1: { file: "bn254_g1.dat", sha256: sha256(srs), bytes: srs.length, points, prefix_sha256: prefixes } },
   circuits: Object.fromEntries(Object.keys(circuits).sort().map((k) => [k, circuits[k]])),
 }

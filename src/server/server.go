@@ -525,6 +525,19 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 				})
 			}
 		}
+		if mid := docDeps.mobileID; mid != nil {
+			if err := reg.Register(mid); err != nil {
+				return Dependencies{}, fmt.Errorf("register mobile-id-zk: %w", err)
+			}
+			for _, rt := range []struct {
+				path string
+				h    http.Handler
+			}{{"registry", mid.RegistryHandler()}, {"circuits", mid.CircuitsHandler()}, {"artifacts/*", mid.ArtifactsHandler()}} {
+				deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
+					MethodID: documentchip.MobileIDMethodID, Path: rt.path, Method: http.MethodGet, Handler: rt.h,
+				})
+			}
+		}
 	}
 
 	// paid-billing-card (checklist #9): the strongest single supplementary

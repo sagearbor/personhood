@@ -466,3 +466,10 @@ func (v *Verifier) bbVerify(ctx context.Context, vk []byte, sp SubProof) error {
 	}
 	return nil
 }
+
+// BBVerify runs `bb verify` (target VerifierTarget) for one proof under vk,
+// with the pinned Barretenberg CLI at bb. It returns ErrProofInvalid when bb
+// rejects the proof. Shared with the mobile-id-zk verifier (../mdoczk).
+func BBVerify(ctx context.Context, bb string, vk []byte, sp SubProof) error {
+	return (&Verifier{BB: bb}).bbVerify(ctx, vk, sp)
+}
