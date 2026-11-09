@@ -280,3 +280,80 @@ func TestAAChallengeIsStable(t *testing.T) {
 		t.Fatalf("AAChallenge = %x, fixtures used %s", got, m.AAChallenge)
 	}
 }
+
+// testChainID is the OpenLine chain the link fixtures were proved for
+// (spikes/zk-passport/link-fixtures.mjs); OpenLine's passport tests use the
+// same chain id and pin the same scope.
+const testChainID = "passport-e2e"
+
+func TestChainScope(t *testing.T) {
+	s := ChainScope(testChainID)
+	t.Logf("ChainScope(%q) = 0x%x", testChainID, s)
+	if got := hex.EncodeToString(s[:]); got != "0728a2109c6a24d69012ccf09e50c212ffce27b662a93775063bc5dab6edea12" {
+		t.Fatalf("chain scope %s (OpenLine's PassportScope vector differs)", got)
+	}
+}
+
+func loadLink(t *testing.T, vector string) SubProof {
+	t.Helper()
+	read := func(f string) []byte {
+		b, err := os.ReadFile(filepath.Join("testdata", vector, "link", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	return SubProof{Circuit: BindCircuit, Proof: read("proof"), PublicInputs: read("public_inputs")}
+}
+
+// The link: a second bind proof of the same passport for a chain's scope.
+func TestVerifyLink(t *testing.T) {
+	ctx := context.Background()
+	for _, vec := range []string{"p256", "rsa-pss"} {
+		t.Run(vec, func(t *testing.T) {
+			v, b := load(t, vec)
+			res, err := v.Verify(ctx, b, testBind, testAA)
+			if err != nil {
+				t.Fatal(err)
+			}
+			link := loadLink(t, vec)
+			n, err := v.VerifyLink(ctx, b, link, ChainScope(testChainID), testBind)
+			if err != nil {
+				t.Fatalf("VerifyLink: %v", err)
+			}
+			if n == res.Nullifier || n == ([FieldSize]byte{}) {
+				t.Fatalf("chain nullifier %x must differ from the issuer's %x", n, res.Nullifier)
+			}
+			t.Logf("chain nullifier %x", n)
+			bad := map[string]func() (Bundle, SubProof, [FieldSize]byte, [BindDataSize]byte){
+				"other chain": func() (Bundle, SubProof, [FieldSize]byte, [BindDataSize]byte) {
+					return b, link, ChainScope("other-chain"), testBind
+				},
+				"issuer scope": func() (Bundle, SubProof, [FieldSize]byte, [BindDataSize]byte) {
+					return b, link, v.Scope, testBind
+				},
+				"other session": func() (Bundle, SubProof, [FieldSize]byte, [BindDataSize]byte) {
+					return b, link, ChainScope(testChainID), BindData(testChallenge, "did:key:other")
+				},
+				"other passport's link": func() (Bundle, SubProof, [FieldSize]byte, [BindDataSize]byte) {
+					other := map[string]string{"p256": "rsa-pss", "rsa-pss": "p256"}[vec]
+					return b, loadLink(t, other), ChainScope(testChainID), testBind
+				},
+				"tampered proof": func() (Bundle, SubProof, [FieldSize]byte, [BindDataSize]byte) {
+					l := link
+					l.Proof = flip(l.Proof, 5000)
+					return b, l, ChainScope(testChainID), testBind
+				},
+				"main bind as link": func() (Bundle, SubProof, [FieldSize]byte, [BindDataSize]byte) {
+					return b, b.Bind, ChainScope(testChainID), testBind
+				},
+			}
+			for name, mk := range bad {
+				bb, l, sc, bd := mk()
+				if _, err := v.VerifyLink(ctx, bb, l, sc, bd); !errors.Is(err, ErrLink) {
+					t.Fatalf("%s: %v", name, err)
+				}
+			}
+		})
+	}
+}

@@ -412,12 +412,49 @@ routes to the selfie check or in-person vouching (it no longer offers
 | wallet: document expired | The phone cannot prove "not expired" (the circuit refuses) | Use a valid document, or another path |
 | wallet: device too weak | Not enough memory, or no arm64 prover | Selfie check or in-person vouching |
 | `face_bind_missing`, `face_bind_failed`, ... | Same as `document-chip` | Same |
+| `zk_link_missing` | The issuer links passports to an OpenLine chain and the app sent no `link` sub-proof (an older app) | Update the app; or the selfie check or in-person vouching |
+| `zk_link_invalid` | The `link` sub-proof is not of this passport, this session or the chain's scope, or does not verify | Start again; if it repeats, update the app or another path |
 | `no_challenge_issued` | `complete` without (or 30 min after) `begin`, or a second `complete` | Start again |
 
 A renewed passport has a new SOD and so a new identifier (`chip:ZK:…`). If its
 face template matches a face enrolled with another document, the credential is
 issued and a review case is queued (`GET /v1/admin/document-reviews`), as for
 `document-chip`: routed, never refused.
+
+## Linking an OpenLine chain
+
+An OpenLine chain can register a passport by itself (OpenLine
+`docs/PASSPORT_ON_CHAIN.md`), under its own nullifier scope
+`zkproof.ChainScope(chain id)` = Poseidon2(pack_be("openline:passport:v1:" +
+chain id)). The same passport then has one number here and another on the
+chain, so someone who enrolls here and also registers on the chain would
+count twice there. With `DOCUMENT_CHIP_ZK_LINK_CHAIN_ID=<chain id>` this
+issuer links every enrollment to that chain:
+
+1. `begin` adds `link_chain_id` and `link_scope` (the chain's scope).
+2. The phone proves `bind` a second time from the same `integrity`
+   commitment (same salts), with the same bind data and the chain's scope,
+   and sends it as `proofs.link` (about one more second).
+3. `complete` verifies it (`zkproof.VerifyLink`): its `comm_in` is this
+   bundle's integrity `comm_out` (so it is the same passport: only whoever
+   holds the chip data could open that commitment), its parameter
+   commitment is this session's bind data, its scope is the chain's (never
+   the issuer's own), the date and nullifier type are checked as for
+   `bind`, and `bb verify` accepts it under the pinned `bind` key.
+4. The method's attestation digest becomes
+   `openline-passport-link/v1:<chain scope hex>:<chain nullifier hex>:<audit digest>`
+   (`LinkDigest`; the audit digest is the one an unlinked enrollment
+   records). The issuer's own identifier (`chip:ZK:...`) is unchanged.
+
+The chain reads the link from the signed credential and gives it the same
+dedup keys as the passport registered on chain, in either order. An
+enrollment without the link is refused (`zk_link_missing`): an unlinked
+passport credential is exactly what could count twice. The chain nullifier
+is public on that chain anyway once the passport is registered there, and a
+chip reader can compute it either way (the OPRF item above).
+
+Fixtures: `spikes/zk-passport/link-fixtures.mjs` proves `testdata/<vector>/link`
+for the test chain `passport-e2e` from the inputs bind-fixtures.mjs used.
 
 ## The CSCA registry root
 
@@ -523,8 +560,12 @@ tools/zk-circuits/build.sh            # once per variant-list or pin change; ~25
 DOCUMENT_CHIP_ANCHOR=1 DOCUMENT_CHIP_ZK=1 \
 DOCUMENT_CHIP_ZK_BB=tools/zk-circuits/node_modules/@aztec/bb.js/build/arm64-macos/bb \
 DOCUMENT_CHIP_ZK_ARTIFACTS_DIR=tools/zk-circuits/dist \
+DOCUMENT_CHIP_ZK_LINK_CHAIN_ID=openline-mainnet \
 IDENTIFIER_HMAC_KEY=... go run ./src/server/cmd/server
 ```
+
+`DOCUMENT_CHIP_ZK_LINK_CHAIN_ID` is optional (see "Linking an OpenLine
+chain"); set it to the chain id the issuer serves.
 
 In Docker, `DOCUMENT_CHIP_ZK_BB` and `DOCUMENT_CHIP_ZK_ARTIFACTS_DIR` already
 point at `/usr/local/bin/bb` and `/zk-artifacts`; set `DOCUMENT_CHIP_ZK=1`

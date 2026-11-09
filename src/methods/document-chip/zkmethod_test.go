@@ -490,3 +490,55 @@ func TestZKAAFixturesUsePinnedCircuits(t *testing.T) {
 		}
 	}
 }
+
+// Linking an OpenLine chain: the enrollment also proves the passport's
+// nullifier on that chain, and the credential's attestation digest carries
+// it, in the form the chain parses.
+func TestZKLinkChain(t *testing.T) {
+	const chainID = "passport-e2e" // the link fixtures' chain (spikes/zk-passport/link-fixtures.mjs)
+	for _, vector := range []string{"p256", "rsa-pss"} {
+		t.Run(vector, func(t *testing.T) {
+			c := newZK(t, vector, Config{})
+			c.m.zk.LinkChainID, c.m.linkScope = chainID, zkproof.ChainScope(chainID)
+			ch, err := c.m.BeginCeremony(context.Background(), c.cc("begin"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ch.Payload["link_chain_id"] != chainID || ch.Payload["link_scope"] != "0x0728a2109c6a24d69012ccf09e50c212ffce27b662a93775063bc5dab6edea12" {
+				t.Fatalf("begin payload %v %v", ch.Payload["link_chain_id"], ch.Payload["link_scope"])
+			}
+			linked := clonePayload(c.fix.payload)
+			linked["proofs"].(map[string]any)["link"] = zkStage(t, vector, "link", zkproof.BindCircuit)
+			res := c.run(t, "s-link-"+vector, linked)
+			if !res.Success {
+				t.Fatalf("refused: %s", res.ErrorReason)
+			}
+			pub, _ := os.ReadFile(filepath.Join("zkproof", "testdata", vector, "link", "public_inputs"))
+			wantN := hex.EncodeToString(pub[6*32 : 7*32])
+			want := LinkPrefix + "0728a2109c6a24d69012ccf09e50c212ffce27b662a93775063bc5dab6edea12:" + wantN + ":"
+			if !strings.HasPrefix(res.AttestationDigest, want) || len(res.AttestationDigest) != len(want)+64 {
+				t.Fatalf("digest %q, want %s<audit>", res.AttestationDigest, want)
+			}
+			// The issuer's own identifier is unchanged by linking.
+			plain := newZK(t, vector, Config{}).run(t, "s-plain-"+vector, c.fix.payload)
+			if plain.VerifiedIdentifier != res.VerifiedIdentifier || strings.HasPrefix(plain.AttestationDigest, LinkPrefix) {
+				t.Fatalf("unlinked %+v", plain)
+			}
+
+			missing := c.run(t, "s-missing-"+vector, c.fix.payload)
+			if missing.Success || missing.ErrorReason != "zk_link_missing" {
+				t.Fatalf("without the link: %+v", missing)
+			}
+			other := map[string]string{"p256": "rsa-pss", "rsa-pss": "p256"}[vector]
+			wrong := clonePayload(c.fix.payload)
+			wrong["proofs"].(map[string]any)["link"] = zkStage(t, other, "link", zkproof.BindCircuit)
+			if r := c.run(t, "s-wrong-"+vector, wrong); r.Success || r.ErrorReason != "zk_link_invalid" {
+				t.Fatalf("another passport's link: %+v", r)
+			}
+			c.m.zk.LinkChainID, c.m.linkScope = "another-chain", zkproof.ChainScope("another-chain")
+			if r := c.run(t, "s-chain-"+vector, linked); r.Success || r.ErrorReason != "zk_link_invalid" {
+				t.Fatalf("another chain's link: %+v", r)
+			}
+		})
+	}
+}

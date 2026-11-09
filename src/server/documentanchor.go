@@ -188,6 +188,9 @@ func documentZKFromEnv(cfg documentchip.Config, onReview func(documentchip.Revie
 		BB: bbPath, Registry: reg, Roots: roots, Circuits: circuits, VKs: vks,
 		PublicURL:        firstNonEmpty(os.Getenv("SERVER_PUBLIC_URL"), "http://localhost:8080"),
 		ArtifactsBaseURL: strings.TrimSpace(os.Getenv("DOCUMENT_CHIP_ZK_ARTIFACTS_URL")),
+		// The OpenLine chain this issuer links passports to (docs/zk-passport.md
+		// "Linking an OpenLine chain"); empty: no link.
+		LinkChainID: strings.TrimSpace(os.Getenv("DOCUMENT_CHIP_ZK_LINK_CHAIN_ID")),
 	}
 	if dir := strings.TrimSpace(os.Getenv("DOCUMENT_CHIP_ZK_ARTIFACTS_DIR")); dir != "" && zc.ArtifactsBaseURL == "" {
 		zc.ArtifactsDir = os.DirFS(dir)
@@ -200,6 +203,9 @@ func documentZKFromEnv(cfg documentchip.Config, onReview func(documentchip.Revie
 	}
 	log.Printf("document-chip-zk: %d circuits pinned; CSCA registry root %s (%d leaves, %d CSCAs without a circuit); bb %s",
 		len(vks), reg.Root, len(reg.Certificates), reg.Skipped, bbPath)
+	if zc.LinkChainID != "" {
+		log.Printf("document-chip-zk: linking every enrollment to OpenLine chain %q", zc.LinkChainID)
+	}
 	return documentchip.NewZKMethod(cfg, zc, onReview), nil
 }
 

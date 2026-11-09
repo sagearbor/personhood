@@ -27,7 +27,9 @@ checks that nothing changes with it off.
 | Religious face covering | Same; an in-person vouch still needs a selfie today | `no_selfie_possible` |
 | No camera / feature phone | Same (needs someone else's phone for the web app) | `no_selfie_possible`; feature phones: **not yet** |
 | Very old phone (Android 6) | No attestation is "absent, not failed" | `old_phone_no_attestation`; the 12 MB face model on that phone: **manual** |
-| Dual citizen with two passports | Flag only | **not yet** (document-chip anchor, built separately) |
+| Dual citizen with two passports | Flag only | **not yet** (document-chip anchor, built separately). On an OpenLine chain a second passport tied to the same identity by the face index is held for review there, not refused (**OpenLine** app version 15) |
+| Passport used here and registered on an OpenLine chain | Counts once on the chain: the enrollment carries the passport's chain nullifier (`DOCUMENT_CHIP_ZK_LINK_CHAIN_ID`) | `TestZKLinkChain`, `zkproof.TestVerifyLink`; chain side **OpenLine** (`passport_dualbind_test.go`) |
+| Renewed passport on an OpenLine chain | "I renewed my passport" from the old phone moves the registration; a renewal registered plainly is held for review when the issuer or reviewers tie it to the old one | **OpenLine** (app version 15); this side: the face index review queue (`TestZKRenewedPassportRoutesToReview`) |
 | Refugee or stateless person | Vouching, NGO vouchers, manual review | `no_selfie_possible` covers the review path; NGO vouchers: **not yet** |
 | Death | Proof of life for UBI | **not yet** (UBI is off at launch) |
 
@@ -51,7 +53,7 @@ checks that nothing changes with it off.
 |---|---|---|
 | Spend the same coins twice | Chain orders payments | **OpenLine** |
 | Look-alike tries to spend your money | Payments need the key, not the face | **OpenLine**; on this side a look-alike cannot move the key's identity: `lookalike_cannot_take_over` |
-| Thief with your unlocked phone | Fingerprint before sending, daily limit | **OpenLine**. Here: the thief can cancel the owner's recovery; the owner's way out is manual review (doc 08) |
+| Thief with your unlocked phone | Fingerprint before sending, daily limit | **OpenLine**. Here: the thief can cancel the owner's recovery; the owner's way out is manual review (doc 08). On chain (app version 15) a repeated cancel no longer stops a passport rebind: the passport proof (with Active Authentication) wins after 7 days, or a reviewer group decides |
 | Instant pay: same deposit at 10 shops | Bond covers it, identity frozen | **OpenLine**; the freeze is `/v1/revocations/equivocation` (`TestIntegration_InPersonVouchAnchorAndEquivocation`) |
 | Wallet bug signs one payment twice | Banned, then appeal, review, reinstatement; the same proof cannot ban again; vouchers' strikes lifted | `wallet_double_sign_bug`. "The wallet never re-signs a slot": **OpenLine** |
 | Offline payments that conflict | Instant tier only, capped by the bond | **OpenLine** |
