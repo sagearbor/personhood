@@ -61,8 +61,10 @@ RUN curl -sfL -o /tmp/bbjs.tgz https://registry.npmjs.org/@aztec/bb.js/-/bb.js-5
 # Without them the image still runs; DOCUMENT_CHIP_ZK_ARTIFACTS_URL can point
 # the wallet elsewhere.
 COPY tools/zk-circuits /tmp/zk-circuits
-RUN mkdir -p /out/zk-artifacts && \
+# mobile-id-zk's circuits (tools/zk-circuits/mdoc/build.sh) likewise, when built.
+RUN mkdir -p /out/zk-artifacts /out/mdoc-artifacts && \
     if [ -d /tmp/zk-circuits/dist ]; then cp /tmp/zk-circuits/dist/* /out/zk-artifacts/; fi && \
+    if [ -d /tmp/zk-circuits/mdoc/dist ]; then cp /tmp/zk-circuits/mdoc/dist/* /out/mdoc-artifacts/; fi && \
     rm -rf /tmp/zk-circuits
 
 # -----------------------------------------------------------------------------
@@ -73,6 +75,7 @@ FROM gcr.io/distroless/base-debian12:nonroot
 COPY --from=builder /out/personhood-server /usr/local/bin/personhood-server
 COPY --from=builder /out/bb /usr/local/bin/bb
 COPY --from=builder /out/zk-artifacts /zk-artifacts
+COPY --from=builder /out/mdoc-artifacts /mdoc-artifacts
 
 # Run as the unprivileged user shipped in the distroless/nonroot image
 # (uid 65532). Declared explicitly so static analysis can see we never
@@ -87,7 +90,8 @@ EXPOSE 8080
 # document-chip-zk stays off unless DOCUMENT_CHIP_ZK=1; these only say where
 # its pieces are in this image.
 ENV DOCUMENT_CHIP_ZK_BB=/usr/local/bin/bb \
-    DOCUMENT_CHIP_ZK_ARTIFACTS_DIR=/zk-artifacts
+    DOCUMENT_CHIP_ZK_ARTIFACTS_DIR=/zk-artifacts \
+    MOBILE_ID_ZK_ARTIFACTS_DIR=/mdoc-artifacts
 
 # Required env at runtime:
 #   ISSUER_ED25519_SK_B64   (issuer signing key)

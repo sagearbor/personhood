@@ -1,0 +1,5 @@
+# mobile-id-zk circuit variants (tools/zk-circuits/mdoc/gen.mjs). The wallet
+# picks the smallest whose Sig_structure size fits the licence's MSO.
+bin/mdoc_p256_msg_2048
+bin/mdoc_p256_msg_3072
+bin/mdoc_p256_msg_4096

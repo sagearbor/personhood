@@ -1,0 +1,52 @@
+{
+ "version": 1,
+ "toolchain": {
+  "noir": "1.0.0-beta.22",
+  "bb": "5.0.0",
+  "circuits": "personhood/tools/zk-circuits/mdoc",
+  "verifier_target": "noir-recursive"
+ },
+ "srs": {
+  "g1": {
+   "file": "bn254_g1.dat",
+   "sha256": "5d0ff516149e0c6644ab16567b914c9d02bf41f872c1129af8436b41d4d82c62",
+   "bytes": 67108864,
+   "points": 1048576,
+   "prefix_sha256": {
+    "131072": "3718ffbed583d8a279ccb2545196d5618e3fd97512b65aa051d2ebd0f57fb999",
+    "262144": "75dd9d569337dc90417c5f50460bc7ac285e72139d49a1d8a3af929ec96943f0",
+    "524288": "ea7b37bb4e1840b5632675fb2d79873ac0a1598374d3087344ba0e980736b8ac",
+    "1048576": "5d0ff516149e0c6644ab16567b914c9d02bf41f872c1129af8436b41d4d82c62"
+   }
+  }
+ },
+ "circuits": {
+  "mdoc_p256_msg_2048": {
+   "file": "mdoc_p256_msg_2048.json.gz",
+   "sha256": "94556aa0946ba824b07ad68363a6a6dbfd5e444895b81138cce2dd5705bb676f",
+   "bytes": 399842,
+   "gates": 474876,
+   "vk_sha256": "821db778efbd20118efa8d222a69fb655e72dcb403824cd30d5f727328056ef2",
+   "license": "clean",
+   "source": "bin/mdoc_p256_msg_2048"
+  },
+  "mdoc_p256_msg_3072": {
+   "file": "mdoc_p256_msg_3072.json.gz",
+   "sha256": "75e33767c3e1ac194b93657efcc4b26204fa6969537bf10286e0c3e8c89b262c",
+   "bytes": 484088,
+   "gates": 548628,
+   "vk_sha256": "278a49bbc8e1c0eb513cd8e1c72d1f8118589879b0d32483aa76dc240e533b4e",
+   "license": "clean",
+   "source": "bin/mdoc_p256_msg_3072"
+  },
+  "mdoc_p256_msg_4096": {
+   "file": "mdoc_p256_msg_4096.json.gz",
+   "sha256": "5e08a64b5488a0e0609ab778bca08784106fb1c450a3cd45951dad624caba3fc",
+   "bytes": 578647,
+   "gates": 622380,
+   "vk_sha256": "c06ae74120170c6be2e46a12ac35ddbf8cd7a3a0d0683e536ad02e5cc8cde417",
+   "license": "clean",
+   "source": "bin/mdoc_p256_msg_4096"
+  }
+ }
+}

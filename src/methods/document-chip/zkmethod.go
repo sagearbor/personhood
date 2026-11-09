@@ -431,8 +431,24 @@ func (m *ZKMethod) HealthCheck(_ context.Context) error {
 
 // RegistryHandler serves the CSCA registry file (GET .../registry).
 func (m *ZKMethod) RegistryHandler() http.Handler {
-	body, _ := json.Marshal(m.zk.Registry)
-	etag := fmt.Sprintf("%q", m.zk.Registry.Root)
+	return jsonHandler(m.zk.Registry, fmt.Sprintf("%q", m.zk.Registry.Root))
+}
+
+// CircuitsHandler serves the circuit manifest (GET .../circuits), with
+// base_url pointing at wherever the artifacts are hosted.
+func (m *ZKMethod) CircuitsHandler() http.Handler {
+	return circuitsHandler(m.zk.Circuits, m.zk.ArtifactsBaseURL, m.url("artifacts/"))
+}
+
+// ArtifactsHandler serves circuit artifacts and the SRS from ArtifactsDir
+// (GET .../artifacts/<file>). Only files the manifest lists are served.
+func (m *ZKMethod) ArtifactsHandler() http.Handler {
+	return artifactsHandler(m.zk.Circuits, m.zk.ArtifactsDir)
+}
+
+// jsonHandler serves v as cacheable JSON with an ETag (registries).
+func jsonHandler(v any, etag string) http.Handler {
+	body, _ := json.Marshal(v)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "public, max-age=3600")
@@ -445,13 +461,13 @@ func (m *ZKMethod) RegistryHandler() http.Handler {
 	})
 }
 
-// CircuitsHandler serves the circuit manifest (GET .../circuits), with
-// base_url pointing at wherever the artifacts are hosted.
-func (m *ZKMethod) CircuitsHandler() http.Handler {
-	mf := *m.zk.Circuits
-	mf.BaseURL = m.zk.ArtifactsBaseURL
+// circuitsHandler serves a circuit manifest with base_url set to baseURL,
+// or fallback (the issuer's own artifacts route).
+func circuitsHandler(manifest *ZKCircuitManifest, baseURL, fallback string) http.Handler {
+	mf := *manifest
+	mf.BaseURL = baseURL
 	if mf.BaseURL == "" {
-		mf.BaseURL = m.url("artifacts/")
+		mf.BaseURL = fallback
 	}
 	if !strings.HasSuffix(mf.BaseURL, "/") {
 		mf.BaseURL += "/"
@@ -464,23 +480,22 @@ func (m *ZKMethod) CircuitsHandler() http.Handler {
 	})
 }
 
-// ArtifactsHandler serves circuit artifacts and the SRS from ArtifactsDir
-// (GET .../artifacts/<file>). Only files the manifest lists are served.
-func (m *ZKMethod) ArtifactsHandler() http.Handler {
+// artifactsHandler serves the files a manifest lists from dir.
+func artifactsHandler(manifest *ZKCircuitManifest, dir fs.FS) http.Handler {
 	allowed := map[string]bool{}
-	for _, c := range m.zk.Circuits.Circuits {
+	for _, c := range manifest.Circuits {
 		allowed[c.File] = true
 	}
-	for _, s := range m.zk.Circuits.SRS {
+	for _, s := range manifest.SRS {
 		allowed[s.File] = true
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := path.Base(r.URL.Path)
-		if m.zk.ArtifactsDir == nil || !allowed[name] {
+		if dir == nil || !allowed[name] {
 			http.NotFound(w, r)
 			return
 		}
-		f, err := m.zk.ArtifactsDir.Open(name)
+		f, err := dir.Open(name)
 		if err != nil {
 			http.NotFound(w, r)
 			return
