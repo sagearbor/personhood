@@ -391,10 +391,9 @@ export function buildInputs(p: ParsedMdoc, iaca: RegistryEntry, s: Session, msgS
   const sigAlg = splitCertificate(p.dsCert).sigAlg
   if (indexOf(sigAlg, ECDSA_SHA256) !== 0) fail("mdoc_unsupported", "document signer certificate is not ecdsa-with-SHA256")
   if (!certificateP256Key(p.dsCert)) fail("mdoc_unsupported", "document signer key is not P-256")
-  const pos = (n: Node | undefined, key: string): number => {
-    // position of the key's text string head: the key node starts at the value's
-    // predecessor; find it among the MSO's entries
-    for (const [k, v] of p.mso.entries ?? []) if (k.value === key) return k.start
+  // Position of a key's text head in issuerMsg: an MSO key, or a key one map down.
+  const pos = (key: string): number => {
+    for (const [k] of p.mso.entries ?? []) if (k.value === key) return k.start
     for (const [, v] of p.mso.entries ?? [])
       for (const [k2] of v.entries ?? []) if (k2.value === key) return k2.start
     return fail("mdoc_malformed", `MSO has no ${key}`)
@@ -441,10 +440,10 @@ export function buildInputs(p: ParsedMdoc, iaca: RegistryEntry, s: Session, msgS
     issuer_msg: pad(p.issuerMsg, msgSize),
     issuer_msg_len: p.issuerMsg.length,
     issuer_sig: ser(p.issuerSig),
-    doc_type_pos: pos(p.mso, "docType"),
-    device_key_pos: pos(p.mso, "deviceKey"),
-    valid_from_pos: pos(p.mso, "validFrom"),
-    valid_until_pos: pos(p.mso, "validUntil"),
+    doc_type_pos: pos("docType"),
+    device_key_pos: pos("deviceKey"),
+    valid_from_pos: pos("validFrom"),
+    valid_until_pos: pos("validUntil"),
     name_space_pos: nsKey.start,
     digest_index: digestIndex,
     item: pad(item, LIMITS.ITEM),

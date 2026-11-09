@@ -3,7 +3,8 @@
 Status: **phase 2 built, behind `MOBILE_ID_ZK=1` (off by default)**. The
 issuer method, the circuit (personhood's own Noir, Apache-2.0), its
 reproducible build and pinned verification keys, the Go verifier, tests and
-the Android wallet flow (OpenLine `mobile/src/services/mobileId/`) exist. It
+the Android wallet flow (OpenLine `mobile/src/services/mobileId/` and
+`mobile/modules/mobile-id-wallet`, sagearbor/openline#199) exist. It
 has been proved only with **specimen licences from a self-made test issuer**
 ("Utopia", no real person, no real issuer). No real wallet has answered
 it yet: Google Wallet releases mobile driving licences to an app only after
@@ -205,9 +206,9 @@ Apple uses 35 days. A state that revokes a licence stops re-signing its MSO.
 - **Phone estimate (not measured):** at the passport's ratio (emulator 4–8×
   slower than the host), expect **10–25 s** on a Pixel-class phone and
   **30–60 s** on a $100 phone, with **~1 GB peak**. That is above the
-  passport's largest circuit (~0.7 GB). The wallet requires ≥ 3 GB RAM for
-  this method and otherwise routes to the passport, the selfie or in-person
-  vouching. A two-proof split (DS+MSO, then item+device), chained by a
+  passport's largest circuit (~0.7 GB). The wallet requires a "4 GB" phone
+  (≥ 3.5 GB reported) for this method and otherwise routes to the passport,
+  the selfie or in-person vouching. A two-proof split (DS+MSO, then item+device), chained by a
   salted commitment like the passport stages, would roughly halve the peak.
   That is the first optimisation if real phones struggle.
 
@@ -380,7 +381,7 @@ So 75, which agrees with the owner's initial guess.
 | wallet / `mdoc_company_signed` | Apple Digital ID or Google ID pass (company-signed) | Use the passport itself (`document-chip-zk`) |
 | wallet: `mdoc_unsupported` | A curve, digest or size the circuits do not take (the wallet knows before proving) | Passport, selfie or vouching; the reason is shown so the variant can be added |
 | wallet: `mdoc_missing_element` | The wallet did not share `document_number` | Try again and allow it; otherwise another way |
-| wallet: device too weak | No arm64 prover, or < 3 GB RAM | Passport (smaller circuits), selfie or vouching |
+| wallet: `mdoc_device_too_weak` | No arm64 prover, or less than a "4 GB" phone | Passport (smaller circuits), selfie or vouching |
 | `mdoc_registry_unknown` | The phone used a registry root we do not publish (stale cache), or the licence's state is not trusted yet | Refresh and retry once automatically; otherwise another way |
 | `mdoc_circuit_unsupported` | Circuit not pinned (old app) | Update the app |
 | `mdoc_session_mismatch` | Transcript, nonce, origin or holder is not this session's | Start again |

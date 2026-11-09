@@ -68,5 +68,6 @@ if (BigInt(returnValue) !== BigInt(vec.expected_nullifier)) throw new Error("nul
 if (process.env.FIXTURE) {
   fs.mkdirSync(process.env.FIXTURE, { recursive: true })
   for (const f of ["proof", "public_inputs", "vk"]) fs.copyFileSync(`${dir}/${f}`, path.join(process.env.FIXTURE, f))
+  if (process.env.INPUTS) fs.writeFileSync(path.join(process.env.FIXTURE, "inputs.json"), JSON.stringify(inputs))
   fs.writeFileSync(path.join(process.env.FIXTURE, "vector.json"), JSON.stringify({ ...vec, circuit: name, measured: row }, null, 1))
 }
