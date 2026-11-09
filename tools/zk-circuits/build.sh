@@ -55,6 +55,13 @@ fix_sha256() {
   if [ -f "$d/sha256.nr" ]; then mv "$d/sha256.nr" "$d/sha256/mod.nr"; fi
 }
 
+# personhood's own Active Authentication circuits (aa/, Apache-2.0): write them
+# into the checkout next to zkPassport's libraries, and always recompile them
+# (compile.mjs caches by name, and aa/lib may have changed).
+# shellcheck disable=SC2086
+node aa/gen.mjs "$CIRCUITS" $LIST
+rm -f "$WORK"/json/aa_*.json 2>/dev/null || true
+
 # shellcheck disable=SC2086
 node compile.mjs "$CIRCUITS" "$WORK/json" $(head -1 <<<"$LIST") >/dev/null 2>&1 || true   # fetches git deps
 fix_sha256

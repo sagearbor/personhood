@@ -272,7 +272,7 @@ func (s *InMemorySessionStore) RecordMethodResult(sessionID string, result types
 		if vm.MethodID == result.MethodID {
 			sess.verifiedMethods[i] = types.VerifiedMethod{
 				MethodID:          result.MethodID,
-				Strength:          metadata.Strength,
+				Strength:          types.EffectiveStrength(metadata, result),
 				VerifiedAt:        result.VerifiedAt,
 				FreshnessLifetime: metadata.FreshnessLifetime,
 				AttestationDigest: result.AttestationDigest,
@@ -284,7 +284,7 @@ func (s *InMemorySessionStore) RecordMethodResult(sessionID string, result types
 	if !replaced {
 		sess.verifiedMethods = append(sess.verifiedMethods, types.VerifiedMethod{
 			MethodID:          result.MethodID,
-			Strength:          metadata.Strength,
+			Strength:          types.EffectiveStrength(metadata, result),
 			VerifiedAt:        result.VerifiedAt,
 			FreshnessLifetime: metadata.FreshnessLifetime,
 			AttestationDigest: result.AttestationDigest,

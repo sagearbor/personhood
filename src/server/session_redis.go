@@ -216,7 +216,7 @@ func (s *RedisSessionStore) RecordMethodResult(sessionID string, result types.Me
 		if vm.MethodID == result.MethodID {
 			rec.VerifiedMethods[i] = types.VerifiedMethod{
 				MethodID:          result.MethodID,
-				Strength:          metadata.Strength,
+				Strength:          types.EffectiveStrength(metadata, result),
 				VerifiedAt:        result.VerifiedAt,
 				FreshnessLifetime: metadata.FreshnessLifetime,
 				AttestationDigest: result.AttestationDigest,
@@ -228,7 +228,7 @@ func (s *RedisSessionStore) RecordMethodResult(sessionID string, result types.Me
 	if !replaced {
 		rec.VerifiedMethods = append(rec.VerifiedMethods, types.VerifiedMethod{
 			MethodID:          result.MethodID,
-			Strength:          metadata.Strength,
+			Strength:          types.EffectiveStrength(metadata, result),
 			VerifiedAt:        result.VerifiedAt,
 			FreshnessLifetime: metadata.FreshnessLifetime,
 			AttestationDigest: result.AttestationDigest,

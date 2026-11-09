@@ -30,14 +30,24 @@ import (
 // today, and one per-passport number scoped to this issuer; not the name,
 // number, birth date, photo, or even the country.
 //
-// No Active Authentication yet (phase 3), so a copied chip passes like a
-// passive-only document-chip enrollment: strength ZKStrength (70).
+// Active Authentication is proved inside the private proof too (the aa
+// sub-proof): the chip signed this session's challenge with the key in
+// DG15, and EF.SOD lists that DG15. Then the strength is ZKStrength (80),
+// as for document-chip with AA. A passport whose EF.SOD lists no DG15
+// proves exactly that (aa_absent) and enrolls at ZKPassiveStrength (70), as
+// a passive-only document-chip enrollment would. A bundle without an aa
+// sub-proof is refused (zk_aa_missing): the issuer cannot tell a chip
+// without DG15 from a clone that left DG15 out.
 
 const (
 	ZKMethodID = "document-chip-zk"
-	// ZKStrength matches ChipPassiveOnlyStrength: passive authentication,
-	// face bound on the phone, no clone resistance yet.
-	ZKStrength = ChipPassiveOnlyStrength
+	// ZKStrength matches ChipStrength: passive authentication and Active
+	// Authentication proved in zero knowledge, face bound on the phone.
+	ZKStrength = ChipStrength
+	// ZKPassiveStrength matches ChipPassiveOnlyStrength: a chip without an
+	// AA key (EF.SOD lists no DG15), so a copy of its files cannot be told
+	// from the original.
+	ZKPassiveStrength = ChipPassiveOnlyStrength
 
 	// zkChallengeTTL is longer than the chip method's: proving takes from
 	// tens of seconds to a few minutes on a cheap phone, after the chip
@@ -215,11 +225,15 @@ func (m *ZKMethod) BeginCeremony(_ context.Context, cc types.CeremonyContext) (t
 	holder := holderBinding(cc)
 	m.challenges.put(cc.SessionID, zkChallenge{challenge: ch, holder: holder, at: m.now()})
 	data := zkproof.BindData(ch, holder)
+	aa := zkproof.AAChallenge(ch)
 	scope := zkproof.ServiceScope()
 	return types.ChallengeData{
 		Type: "document-chip-zk-challenge",
 		Payload: map[string]any{
-			"bind_data_hex":       hex.EncodeToString(data[:]),
+			"bind_data_hex": hex.EncodeToString(data[:]),
+			// The 8 bytes the chip signs for Active Authentication, derived
+			// from the session challenge (zkproof.AAChallenge).
+			"aa_challenge_hex":    hex.EncodeToString(aa[:]),
 			"service_scope":       "0x" + hex.EncodeToString(scope[:]),
 			"service_subscope":    "0x" + strings.Repeat("0", 64),
 			"registry_url":        m.url("registry"),
@@ -261,6 +275,10 @@ func zkReason(err error) string {
 		return "zk_date_stale"
 	case errors.Is(err, zkproof.ErrBindMismatch):
 		return "zk_bind_mismatch"
+	case errors.Is(err, zkproof.ErrAAMissing):
+		return "zk_aa_missing"
+	case errors.Is(err, zkproof.ErrAAChallenge):
+		return "zk_aa_mismatch"
 	case errors.Is(err, zkproof.ErrScope):
 		return "zk_scope_mismatch"
 	case errors.Is(err, zkproof.ErrMockDocument):
@@ -287,8 +305,15 @@ func (m *ZKMethod) CompleteCeremony(ctx context.Context, cc types.CeremonyContex
 	}
 	var b zkproof.Bundle
 	var okAll = true
-	for i, dst := range []*zkproof.SubProof{&b.DSC, &b.ID, &b.Integrity, &b.Bind} {
+	for i, dst := range []*zkproof.SubProof{&b.DSC, &b.ID, &b.Integrity, &b.Bind, &b.AA} {
 		sp, ok := parseSubProof(resp.Payload, zkproof.Stages[i])
+		if !ok && zkproof.Stages[i] == "aa" {
+			if proofs, _ := resp.Payload["proofs"].(map[string]any); proofs["aa"] == nil {
+				// No Active Authentication sub-proof at all (an older app,
+				// or a clone that left DG15 out): refused, with a next step.
+				return fail(ZKMethodID, "zk_aa_missing"), nil
+			}
+		}
 		okAll = okAll && ok
 		*dst = sp
 	}
@@ -308,7 +333,7 @@ func (m *ZKMethod) CompleteCeremony(ctx context.Context, cc types.CeremonyContex
 	case <-ctx.Done():
 		return types.MethodResult{}, ctx.Err()
 	}
-	res, err := m.verifier.Verify(ctx, b, zkproof.BindData(ch.challenge, ch.holder))
+	res, err := m.verifier.Verify(ctx, b, zkproof.BindData(ch.challenge, ch.holder), zkproof.AAChallenge(ch.challenge))
 	<-m.sem
 	if err != nil {
 		if reason := zkReason(err); reason != "" {
@@ -323,12 +348,17 @@ func (m *ZKMethod) CompleteCeremony(ctx context.Context, cc types.CeremonyContex
 	} else if reason != "" {
 		return fail(ZKMethodID, reason), nil
 	}
+	strength := ZKStrength
+	if !res.ActiveAuth {
+		strength = ZKPassiveStrength
+	}
 	return types.MethodResult{
 		Success:            true,
 		MethodID:           ZKMethodID,
 		VerifiedAt:         m.now(),
-		AttestationDigest:  digestOf(cc.SessionID, "zk", hex.EncodeToString(res.RegistryRoot[:]), b.DSC.Circuit, b.ID.Circuit, b.Integrity.Circuit),
+		AttestationDigest:  digestOf(cc.SessionID, "zk", hex.EncodeToString(res.RegistryRoot[:]), b.DSC.Circuit, b.ID.Circuit, b.Integrity.Circuit, b.AA.Circuit),
 		VerifiedIdentifier: identifier,
+		Strength:           strength,
 	}, nil
 }
 

@@ -2,21 +2,26 @@
 
 Status: **phase 2 built, behind `DOCUMENT_CHIP_ZK=1` (off by default)**.
 The issuer method, session binding, CSCA registry, pinned circuit set and the
-Android wallet prover (OpenLine `mobile/modules/zk-prover`) exist; a real
-passport on a real phone has not been through it yet. The existing
-`document-chip` method (docs/document-chip-anchor.md) is unchanged and stays
-the fallback. Method id `document-chip-zk`, strength 70.
+Android wallet prover (OpenLine `mobile/modules/zk-prover`) exist, and
+Active Authentication is proved inside the private proof (phase 3, below); a
+real passport on a real phone has not been through it yet. Method id
+`document-chip-zk`, strength 80 when the chip proves Active Authentication,
+70 for a passport without DG15. The plain `document-chip` method
+(docs/document-chip-anchor.md) is unchanged, but the OpenLine wallet no
+longer offers it: passport data never leaves the phone (owner decision,
+2026-11-08). When the private proof cannot be made the wallet explains why
+and routes to the selfie check or in-person vouching.
 
 ## The problem, in one table
 
 | | `document-chip` (today) | `document-chip-zk` (this design) |
 |---|---|---|
-| What the phone sends | DG1 (name, document number, birth date, MRZ), EF.SOD, DSC, AA signature | Four zero-knowledge proofs (4 × 14.6 KB) plus 14 public numbers, and the face-bind outcome |
+| What the phone sends | DG1 (name, document number, birth date, MRZ), EF.SOD, DSC, AA signature | Five zero-knowledge proofs (5 × 14.6 KB) plus 16 public numbers, and the face-bind outcome |
 | What the issuer learns | Everything in DG1, then drops it | That *some* passport chained to a CSCA in our list is valid today, and one opaque per-passport number |
 | Country | Learned (from the CSCA) | Not learned |
 | Photo (DG2) | Stays on the phone | Stays on the phone |
 | Same passport twice | Same identifier, same identity | Same identifier, same identity |
-| Clone resistance (AA) | Yes, when the chip has DG15 | Not in phase 2 (see "Active Authentication") |
+| Clone resistance (AA) | Yes, when the chip has DG15 | Yes, when the chip has DG15, proved in zero knowledge (DG15 and the signature stay on the phone) |
 
 The goal is the right-hand column: the name, document number, birth date and
 photo never leave the phone, and the issuer still issues one identity per
@@ -73,7 +78,8 @@ of one passport cannot be chained to a proof of another.
 
 ```
   dsc ──comm──▶ id ──comm──▶ integrity ──comm──▶ bind
-   │                                               │
+   │              │                                │
+   │              └──comm──▶ aa (AA challenge public)
    └ registry root (public)   current date, scope, nullifier, session commitment (public)
 ```
 
@@ -83,6 +89,7 @@ of one passport cannot be chained to a proof of another.
 | `id` (sig_check_id_data_…) | That DSC signed EF.SOD's signed attributes | commitment in, out |
 | `integrity` (data_check_integrity_…) | The signed attributes hash eContent; eContent lists the hash of DG1 (and DG2) | commitment in, out |
 | `bind` (bind) | DG1's expiry date is on or after `current_date`; outputs the scoped nullifier; commits to 509 bytes of data (the issuer's session challenge and the holder DID) | commitment in, current date, scope, subscope, parameter commitment, nullifier type, nullifier, OPRF key hash |
+| `aa` (personhood, `aa_…`) | Opens the same `id` commitment `integrity` opens, then either: EF.SOD lists no DG15 (`aa_absent`), or EF.SOD lists H(DG15) and the chip's signature over the 8-byte AA challenge verifies under DG15's key | commitment in (= `id`'s out), AA challenge |
 
 The circuits also tie the country together: the CSCA's registry leaf carries
 a country, and the `id` circuit rebuilds the incoming commitment with the
@@ -112,6 +119,9 @@ keys from its own pinned list.
 6. The proof was made for this session: its parameter commitment is
    `Poseidon2(8, 17, pack(data))` with `data` = the 32-byte challenge from
    `begin` ‖ SHA-256("personhood/zk-bind/v1" 0x00 ‖ holder DID) ‖ zeros.
+7. Either the chip holding this passport's DG15 key signed this session's
+   AA challenge (Active Authentication), or this passport's EF.SOD lists no
+   DG15 at all.
 
 Optional disclosures (nationality, age over N) are separate zkPassport
 circuits that chain from the same `integrity` commitment. They are **off by
@@ -158,25 +168,172 @@ reader cannot compute it, and the issuer never sees the unkeyed value. This
 matters once nullifiers are published (for example on the OpenLine chain).
 While the issuer only stores HMACed values it adds little, so it is phase 3.
 
-## Active Authentication and clones
+## Active Authentication and clones (phase 3, done)
 
 A chip dump replays perfectly through passive authentication, with or
 without zero knowledge. AA is what stops it: the chip signs a fresh issuer
 challenge with a key that cannot be extracted (DG15 holds the public key,
 and EF.SOD covers DG15).
 
-Options:
+Options considered:
 
 | Option | What leaks | Work |
 |---|---|---|
-| A. Out of circuit: phone sends DG15 public key + AA signature; a circuit proves DG15's hash is in eContent and outputs `Poseidon2(DG15)` | The DG15 public key is a stable, unique per-chip number. Not personal data, but a linkable identifier that every AA reader sees | Small: one new integrity-style circuit that also outputs a DG15 commitment (Rarimo's pattern) |
-| B. In circuit: verify the AA signature over the issuer's challenge inside a circuit chained from `integrity`; the challenge is a public input | Nothing beyond today's proof | Medium: AA is usually RSA with ISO/IEC 9796-2 scheme 1 (SHA-1), sometimes ECDSA. New Noir circuit, roughly the size of an `id` sub-proof (~170–230 k gates) per algorithm |
+| A. Out of circuit: phone sends DG15 public key + AA signature; a circuit proves DG15's hash is in eContent and outputs `Poseidon2(DG15)` | The DG15 public key is a stable, unique per-chip number. Not personal data, but a linkable identifier that every AA reader sees | Small |
+| **B. In circuit (chosen)**: verify the AA signature over the issuer's challenge inside a circuit chained from the passport's commitment; the challenge is a public input | Nothing beyond today's proof | One new circuit family |
 
-Recommendation: **B in phase 3.** It keeps the "nothing leaves the phone"
-property and doubles as session binding (the issuer's challenge is inside the
-proof). Until then `document-chip-zk` is passive-only, which is the same
-footing as `DOCUMENT_CHIP_ALLOW_PASSIVE_ONLY=1` today: strength **70**, not 80.
-Chips without DG15 stay at 70 in either design.
+**Rarimo** (MIT, `rarimo/passport-zk-circuits` and `-noir`, read for this
+work) does option A: its registration circuit outputs
+`dg15PubKeyHash` (Poseidon of the RSA-1024 modulus, or of the EC point) and
+the AA signature is checked by their smart contract, out of circuit. The DG15
+position is a compile-time shift per passport layout, RSA AA is hard-wired to
+1024 bits, and a passport without DG15 is a separate flow, with nothing
+proving the absence. We kept their idea (prove "DG15 is in the signed SOD")
+and moved the signature check inside the proof, parsed DG15 with checked DER
+instead of fixed offsets, and added a proof of absence.
+
+### The `aa` sub-proof
+
+Personhood's own Noir circuits (`tools/zk-circuits/aa/`, Apache-2.0),
+compiled and pinned with the zkPassport set by `build.sh`
+(`aa/gen.mjs` writes them into the circuits checkout next to zkPassport's
+libraries):
+
+- **Chaining.** `aa` takes the `id` sub-proof's `comm_out` as its
+  `comm_in` and opens it exactly as `integrity` does (salt, issuing state,
+  signed attributes, DG1, eContent, private nullifier). `integrity` proves
+  that eContent is the one the signed attributes hash, so `aa` speaks about
+  the same, state-signed eContent. The issuer checks
+  `aa.comm_in == id.comm_out`.
+- **`aa_absent`**: no `02 01 0F 04` (INTEGER 15 followed by an OCTET STRING,
+  the start of every DER DataGroupHash for DG15) anywhere in the 700-byte
+  eContent array. Scanning the zero padding too is sound and needs no
+  length. About 10k gates.
+- **`aa_dg_<h>_<alg>_<h'>`**: the length of eContent comes from its own DER
+  header (constrained, so a DG15 entry hidden in the padding does not
+  count); a DataGroupHash `30 <5+H> 02 01 0F 04 <H> <hash>` inside that
+  length must equal `<h>(DG15)` (DG15 padded to 512 bytes, its length from
+  its own header). DG15 is then parsed with every DER header checked and the
+  key required to end exactly where DG15 ends, so the prover cannot point
+  at other bytes:
+  - **RSA** (`rsa_1024|1536|2048`): rsaEncryption OID, modulus of exactly
+    the circuit's size with its top bit set, exponent odd, 3 ≤ e < 2^17.
+    J = s^e mod n with noir-bignum (s < n and J canonical are constrained);
+    J or n − J (the low nibble of J is always 0xC) must be
+    `6A ‖ M1 ‖ H(M1 ‖ challenge) ‖ trailer`, ISO/IEC 9796-2 scheme 1
+    (partial recovery). Trailer `BC` (SHA-1 implicit) or `33 CC` for the SHA-1
+    circuits, `34 CC` for SHA-256.
+  - **ECDSA P-256** (`ecdsa_p256`): id-ecPublicKey OID (named or explicit
+    domain parameters), uncompressed point; the point is checked to be on
+    P-256 with noir-bignum's secp256r1 field (so a key of another curve
+    cannot be fed in), and the plain `r ‖ s` signature over `<h'>(challenge)`
+    (truncated or left-padded to 256 bits) is verified with Noir's built-in
+    `std::ecdsa_secp256r1` black box. No third-party curve library.
+- **Public inputs**: `comm_in` and the 8-byte challenge (one field). DG15,
+  the signature, the hash used and even whether the key is RSA or EC stay
+  private, except for what the circuit name says (the issuer pins vks per
+  circuit, like every other stage).
+
+### The challenge
+
+ICAO 9303 AA takes an 8-byte challenge (RND.IFD). The issuer derives it from
+the session challenge it already issues for `bind`:
+`AA challenge = SHA-256("personhood/zk-aa/v1" 0x00 ‖ challenge)[:8]`
+(`zkproof.AAChallenge`), and `begin` returns it as `aa_challenge_hex`.
+Derived, not separately random, because one `begin` then issues one secret,
+both proofs answer the same session, and the challenge store needs no new
+state; domain-separated so the chip never signs the raw bind bytes. Each
+challenge answers one `complete` within 30 minutes, as before, so an AA
+proof or a chip signature from an earlier session is useless.
+
+### Rules (same as `document-chip`)
+
+- The `aa` sub-proof is **always required**. The issuer cannot see DG15, so
+  "this passport has no AA" must itself be proved (`aa_absent`): a bundle
+  without `aa` is refused with `zk_aa_missing`. That closes the hole where a
+  clone simply leaves DG15 out.
+- `aa_dg_…` proved: strength **80** (`ZKStrength`, as `document-chip` with
+  AA). `aa_absent`: strength **70** (`ZKPassiveStrength`), never refused.
+  The method result carries the strength (`MethodResult.Strength`, new; it
+  can only lower the metadata strength), so policies with a per-method
+  minimum see the real value.
+- EF.SOD lists DG15 but the chip did not answer, or its answer does not
+  verify: the wallet cannot make any `aa` proof and shows `zk_aa_failed`
+  (hold the passport still and try again, or use the selfie check /
+  in-person vouching). That is the clone signal, routed, not a dead end.
+- An AA key no circuit takes (below) gives `zk_aa_unsupported` on the
+  phone, routed the same way.
+
+### Coverage
+
+| AA variant | Covered | Why not |
+|---|---|---|
+| RSA-1024/1536/2048, ISO 9796-2 scheme 1, SHA-1 (`BC` or `33CC`) | Yes, every DG hash | |
+| RSA-1024/1536/2048, ISO 9796-2, SHA-256 (`34CC`) | Yes, every DG hash | |
+| RSA-3072, or 9796-2 with SHA-224/384/512 | Generator supports them; not in the core set | Rare; a one-line addition to `variants/core.txt` |
+| ECDSA P-256, plain r‖s, SHA-1/224/256/384/512 | Yes, every DG hash | |
+| **ECDSA on brainpoolP256r1/384r1/512r1, P-384, P-521** | **No** | Needs a curve library for those curves inside the circuit. `noir_bigcurve` has no license, and Noir has a black box only for secp256r1/k1. Writing one on noir-bignum (Apache-2.0, it has the field parameters) is possible but is a large, separate, audited piece of work (≈1.5M gates per verification without optimisation) |
+| RSA moduli whose bit length is not a multiple of 8, exponents ≥ 2^17 | No | Not seen in practice |
+
+The core set is `aa_absent` plus 5 DG hashes × (3 RSA sizes × 2 hashes +
+P-256 × 5 hashes) = 56 circuits. Sizes: `aa_absent` 10k gates;
+RSA-1024 118–190k (DG hash SHA-256 vs SHA-512); RSA-2048 173–230k;
+P-256 100–232k. Artifacts 0.07–1.4 MB each (43 MB for all 56, a phone
+downloads one).
+
+### Tests
+
+- `spikes/zk-passport/aa-circuit-tests.mjs`: for every built `aa_dg_…`
+  circuit, a synthetic passport and a fresh chip key; 328 checks: the
+  chip's answer is accepted (J and n − J, implicit and explicit SHA-1
+  trailers); refused: a signature over another challenge (replayed AA
+  signature), another chip's DG15 and signature (DG15 not in this EF.SOD),
+  another key's signature under this DG15, a wrong `comm_in`, the wrong AA
+  hash; `aa_absent` refuses a passport with DG15 and a challenge wider than
+  8 bytes. `--prove` also proves one circuit per family.
+- `spikes/zk-passport/aa-fixtures.mjs`: Go fixtures from the personhood test
+  passports (rsa-pss has an RSA-1024 AA key, p256 has no DG15).
+- Go (`zkproof_test.go`, `zkmethod_test.go`, `src/server`): both vectors
+  enrol (80 and 70); refused: `aa` missing (`zk_aa_missing`), `aa` answering
+  an older session's challenge (`zk_aa_mismatch`), that proof with its
+  public challenge rewritten (`zk_proof_invalid`), `aa` of another passport
+  (`zk_chain_broken`), an unpinned or misnamed `aa` circuit, an AA proof
+  passed off as `aa_absent`.
+- OpenLine wallet: `zkPassportAA.test.ts` (planning, P-256 over every hash,
+  replay, foreign DG15, brainpool → unsupported) and the end-to-end test
+  against a local issuer, now with the test chip answering the issuer's AA
+  challenge (five real proofs, credential issued, re-enrolment gives the
+  same identity, no DG1/SOD/DG15/signature leaves the phone).
+
+### Measured (Apple M4 host, `zkprove`, 4 threads)
+
+| Stage (rsa-pss vector) | Gates | Witness + prove | Peak RSS |
+|---|---|---|---|
+| id | 171,357 | 1.7 s | 418 MB |
+| integrity | 79,338 | 0.8 s | 284 MB |
+| bind | 74,682 | 0.8 s | 321 MB |
+| **aa** (`aa_dg_sha256_rsa_1024_sha1`) | 117,770 | **1.3 s** | **306 MB** |
+
+AA adds one proof of about 120k gates (≈ +20% proving time for this
+passport, ≈ +25% for a typical RSA passport) and does not raise peak memory:
+the `aa` proof is smaller than `dsc`/`id`, and proofs run one at a time.
+The largest core AA circuit (230k gates, RSA-2048 with SHA-512 DG hashes)
+proves in about 1.5 s / 700 MB on the host (`bb`, all cores). On a $50
+phone expect roughly 8–15 s more. Verification adds one `bb verify`
+(about 8 ms).
+
+### US passports and AA
+
+We could not find an authoritative public statement either way. The State
+Department's e-passport rule (70 FR 61553, 25 Oct 2005) describes the chip's
+protection as a digital signature, Basic Access Control and an anti-skimming
+cover, and does not mention Active Authentication; contemporary coverage
+(SecurityInfoWatch, 26 Oct 2005) is the same. Some secondary material
+mentions DG15 in US passports, but none of it is a primary source or a
+published chip read. **Unverified**: treat it as unknown until a current US
+passport has been read (the owner's Pixel test will show it: the aa circuit the wallet picks,
+`aa_absent` or `aa_dg_…`, says whether EF.SOD lists DG15). Either way US passports enrol: with DG15 at 80,
+without it at 70 (`aa_absent`).
 
 ### Session binding (done in phase 2)
 
@@ -236,19 +393,24 @@ credential is the same W3C VC with the same `nullifierBinding` scheme the
 issuer issues today. No new storage.
 
 Refusals, each with a next step (no false lockout). The wallet turns each
-into text with what to do next and always offers `document-chip` (with an
-honest note that it sends the passport data) or another way in:
+into text with what to do next; when the private proof cannot be made it
+routes to the selfie check or in-person vouching (it no longer offers
+`document-chip`: passport data never leaves the phone):
 
 | Reason | Meaning | Next step |
 |---|---|---|
 | `zk_registry_unknown` | Proof used a registry root we don't publish (stale app cache) | Wallet refreshes the registry, begins again and proves again, once, automatically |
-| `zk_circuit_unsupported` | A circuit the passport needs is not in the pinned set (the wallet knows before proving, from the manifest) | Offer `document-chip` or another way; the wallet shows the variant name so it can be added |
+| `zk_circuit_unsupported` | A circuit the passport needs is not in the pinned set (the wallet knows before proving, from the manifest) | Selfie check or in-person vouching; the wallet shows the variant name so it can be added |
+| `zk_aa_missing` | No `aa` sub-proof (old app, or a clone leaving DG15 out) | Update the app; or another way in |
+| `zk_aa_mismatch` | The `aa` proof answers another session's challenge | Start again |
+| wallet: `zk_aa_failed` | EF.SOD lists DG15 but the chip did not answer (or its answer does not verify): the clone signal | Hold the passport still and try again; or another way in |
+| wallet: `zk_aa_unsupported` | AA key no circuit takes (brainpool ECDSA, unusual RSA size) | Selfie check or in-person vouching |
 | `zk_proof_invalid`, `zk_chain_broken`, `zk_bundle_malformed` | Bad or mixed proofs | Prove again; if it repeats, another path |
 | `zk_bind_mismatch` | Proof made for another session or holder key | Start again (new session) |
 | `zk_date_stale` | `current_date` is more than 36 h from the issuer's clock | Fix the phone's clock, prove again |
 | `zk_scope_mismatch`, `zk_mock_document` | Proof for another service, or a test document | Another path |
 | wallet: document expired | The phone cannot prove "not expired" (the circuit refuses) | Use a valid document, or another path |
-| wallet: device too weak | Not enough memory, or no arm64 prover | `document-chip` with consent, or selfie/vouch |
+| wallet: device too weak | Not enough memory, or no arm64 prover | Selfie check or in-person vouching |
 | `face_bind_missing`, `face_bind_failed`, ... | Same as `document-chip` | Same |
 | `no_challenge_issued` | `complete` without (or 30 min after) `begin`, or a second `complete` | Start again |
 
@@ -314,16 +476,17 @@ needs out of bb's CRS cache (`dist/bn254_g1.dat`).
   `DOCUMENT_CHIP_ZK_ARTIFACTS_URL`. The issuer serves only files the manifest
   lists, and warns at start-up about missing or changed ones.
 - The wallet fetches `GET /v1/methods/document-chip-zk/circuits`, works out
-  the four variants its passport needs, downloads only those (about 5–7 MB)
+  the five variants its passport needs, downloads only those (about 5–8 MB)
   plus the SRS once, checks each SHA-256 against the manifest and caches them
   by hash.
-- The core set (74 variants): `bind`, all 25 integrity variants, and RSA
+- The core set (130 variants): the 56 personhood `aa` circuits (above),
+  `bind`, all 25 integrity variants, and RSA
   `dsc`/`id` variants for RSA-4096/3072 CSCAs and RSA-2048…4096 document
   signers with SHA-256 (PKCS#1 v1.5 and PSS; SHA-384/512 for RSA-4096
   CSCAs), at every TBS size. That covers US-style passports (CSCA RSA-4096,
   sha256WithRSA) if their DSC is RSA. A passport that needs another variant
-  is told so before proving, with the variant name, and offered
-  `document-chip`. Widening the set is a one-line change to the list plus a
+  is told so before proving, with the variant name, and routed to the other
+  ways in. Widening the set is a one-line change to the list plus a
   rebuild.
 
 ## Licenses
@@ -331,6 +494,7 @@ needs out of bb's CRS cache (`dist/bn254_g1.dat`).
 | Component | License | Where it runs |
 |---|---|---|
 | zkPassport circuits | Apache-2.0 | compiled into the artifacts (phone), vks (issuer) |
+| personhood `aa` circuits (`tools/zk-circuits/aa/`) | Apache-2.0 | compiled into the `aa_…` artifacts; they use zkPassport's commitment/utils libraries, noir-bignum, sha1/sha256/sha512 and Noir's built-in secp256r1 black box, **not** `noir_bigcurve` |
 | noir_rsa, noir-bignum, noir-ecdsa, sha1, sha512, noir-lang poseidon/sha256 | Apache-2.0 | inside the artifacts |
 | noir-date, TaceoLabs noir-poseidon, oprf-nr | MIT | inside the artifacts |
 | **noir_bigcurve** (zkpassport fork of noir-lang/noir_bigcurve) | **none: no license file, upstream either** | inside every **ECDSA** artifact |
@@ -347,7 +511,10 @@ noir-lang (Aztec) to add a license to `noir_bigcurve` (all their other Noir
 libraries are MIT/Apache, so this looks like an oversight); for P-256 only,
 swap the curve check for Noir's built-in `std::ecdsa_secp256r1` black box
 (a circuit change we would have to review ourselves); or write our own
-curve library. Until then ECDSA passports use `document-chip`.
+curve library. Until then ECDSA passports cannot use `document-chip-zk` and
+are routed to the other ways in. (The `aa` circuits already use the
+secp256r1 black box for P-256 Active Authentication, so that path is
+reviewed code of ours.)
 
 ## Running it (issuer)
 
@@ -387,13 +554,13 @@ inside it.
 
 ## Strength and limits compared with `document-chip`
 
-| | `document-chip` | `document-chip-zk` (phase 2) |
+| | `document-chip` | `document-chip-zk` (phase 3) |
 |---|---|---|
 | Privacy toward the issuer | Sees DG1 in memory | Sees nothing personal, not even the country |
 | Uniqueness | One identity per document number per state | One identity per passport (SOD); renewals route |
 | Forgery of passport data | Impossible without a state key | Same (soundness of the proof system, unaudited circuits) |
-| Clone/replay of chip files | Stopped by AA when present | **Not stopped** until AA-in-circuit (phase 3) |
-| Strength | 80 (70 passive-only) | 70 |
+| Clone/replay of chip files | Stopped by AA when present | Same: stopped by AA proved in zero knowledge when the chip has DG15 |
+| Strength | 80 (70 passive-only) | 80 with AA, 70 without DG15 |
 | Phone requirements | NFC | NFC + about 650 MB free RAM + 30–90 s (estimated, below) |
 | Expired documents | Refused with next step | Same |
 | CSCA trust | Issuer's master list | Same list, as a Merkle root |
@@ -478,12 +645,12 @@ the first three.
   it), and the private nullifier is computed over the normalised signature.
 - **Flow:** the wallet prefers `document-chip-zk` whenever the issuer offers
   it and the phone can prove (arm64 prover, ≥ 2.7 GB RAM, not low on
-  memory): read the chip (no AA), face bind on the phone as today, download
-  the four circuits + the SRS prefix it needs (cached by hash), prove, send
-  only the proofs and the face-bind outcome. Sending the passport data
-  (`document-chip`) is an explicit choice with an honest explanation, shown
-  only when the phone cannot prove or proving failed in a way the plain
-  method could get past.
+  memory): read the chip (the chip answers the AA challenge when it has
+  DG15), face bind on the phone as today, download the five circuits + the
+  SRS prefix it needs (cached by hash), prove, send only the proofs and the
+  face-bind outcome. The wallet never sends the passport data
+  (`document-chip`); when it cannot prove it explains why and routes to the
+  selfie check or in-person vouching.
 
 ### Measured (2026-11-08)
 
@@ -523,11 +690,12 @@ leaves the "phone". Only NFC, the selfie and the UI are faked.
 | 1 | Issuer method `document-chip-zk` | Done (this PR) |
 | 2 | Session binding (`bind`, Poseidon2 in Go) | Done |
 | 3 | Registry from the BSI list, published, 60-day grace | Done |
-| 4 | Circuit artifacts: reproducible build, hosting, pinned vks | Done (74-variant RSA core set) |
+| 4 | Circuit artifacts: reproducible build, hosting, pinned vks | Done (130 variants: RSA core set + 56 AA) |
 | 5 | Android proving in the wallet | Done (OpenLine PR); not yet run on a real phone |
 | 6 | Measure on a real Pixel 10 and a low-end phone (2–3 GB) | **To do** (owner's phone first) |
 | 7 | iOS (same Rust via noir_rs) | Later |
-| 8 | Phase 3: AA in-circuit, OPRF-salted nullifier, audit; ECDSA once `noir_bigcurve` is licensed | Later |
+| 8 | Phase 3: AA in-circuit | **Done** (RSA 9796-2 and P-256; brainpool AA not covered) |
+| 9 | OPRF-salted nullifier, audit; ECDSA (passports and brainpool AA) once a licensed curve library exists | Later |
 
 Before anything ships beyond testing: resolve the `noir_bigcurve` license
 question (ECDSA passports), and get the enabled circuits reviewed.
@@ -537,7 +705,9 @@ question (ECDSA passports), and get the enabled circuits reviewed.
 ```sh
 spikes/zk-passport/run.sh                       # phase-1 spike, both vectors
 ZK_SCOPE=0x28a6676ad15b10f2b78fb5f1e25cd20c68e5d4611ecf6b364df8427d0c69edfe node spikes/zk-passport/bind-fixtures.mjs   # regenerate the bind fixtures
-tools/zk-circuits/build.sh                      # circuit artifacts + pinned vks
+tools/zk-circuits/build.sh                      # circuit artifacts + pinned vks (~6 min with compiled circuits cached)
+(cd spikes/zk-passport && node aa-fixtures.mjs)  # aa Go fixtures (after build.sh)
+(cd spikes/zk-passport && node aa-circuit-tests.mjs [--prove])   # AA circuit checks, all variants
 cd src/methods/document-chip && go test ./...   # needs bb: $BB, PATH, or tools/zk-circuits/node_modules
 ```
 

@@ -3,9 +3,11 @@
   "dsc": "sig_check_dsc_tbs_700_ecdsa_nist_p256_sha256",
   "id": "sig_check_id_data_tbs_700_ecdsa_nist_p256_sha384",
   "integrity": "data_check_integrity_sa_sha384_dg_sha384",
-  "bind": "bind"
+  "bind": "bind",
+  "aa": "aa_absent"
  },
  "registry_root": "0x197c48ca049bff8c77f13ddf6b7d498a85749dcb47463980ee5df15bfb0b4ca8",
  "scope": "0x28a6676ad15b10f2b78fb5f1e25cd20c68e5d4611ecf6b364df8427d0c69edfe",
- "current_date": 1794173774
+ "current_date": 1794173774,
+ "aa_challenge": "0xd146d2339f0b53c5"
 }

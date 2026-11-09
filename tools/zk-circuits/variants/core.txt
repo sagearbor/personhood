@@ -78,3 +78,65 @@ bin/sig-check/id-data/tbs_1600/rsa/pkcs/3072/sha256
 bin/sig-check/id-data/tbs_1600/rsa/pss/3072/sha256
 bin/sig-check/id-data/tbs_1600/rsa/pkcs/4096/sha256
 bin/sig-check/id-data/tbs_1600/rsa/pss/4096/sha256
+
+# personhood Active Authentication (aa/gen.mjs; Apache-2.0, no noir_bigcurve):
+# aa_absent for passports whose EF.SOD lists no DG15, and for each DG hash
+# algorithm: RSA-1024/1536/2048 AA (ISO 9796-2 scheme 1, SHA-1 or SHA-256)
+# and ECDSA P-256 AA (any SHA-1/SHA-2 hash). RSA-3072 and SHA-224/384/512
+# 9796-2 variants exist in gen.mjs but are not in the core set.
+bin/personhood-aa/aa_absent
+bin/personhood-aa/aa_dg_sha1_rsa_1024_sha1
+bin/personhood-aa/aa_dg_sha1_rsa_1024_sha256
+bin/personhood-aa/aa_dg_sha1_rsa_1536_sha1
+bin/personhood-aa/aa_dg_sha1_rsa_1536_sha256
+bin/personhood-aa/aa_dg_sha1_rsa_2048_sha1
+bin/personhood-aa/aa_dg_sha1_rsa_2048_sha256
+bin/personhood-aa/aa_dg_sha1_ecdsa_p256_sha1
+bin/personhood-aa/aa_dg_sha1_ecdsa_p256_sha224
+bin/personhood-aa/aa_dg_sha1_ecdsa_p256_sha256
+bin/personhood-aa/aa_dg_sha1_ecdsa_p256_sha384
+bin/personhood-aa/aa_dg_sha1_ecdsa_p256_sha512
+bin/personhood-aa/aa_dg_sha224_rsa_1024_sha1
+bin/personhood-aa/aa_dg_sha224_rsa_1024_sha256
+bin/personhood-aa/aa_dg_sha224_rsa_1536_sha1
+bin/personhood-aa/aa_dg_sha224_rsa_1536_sha256
+bin/personhood-aa/aa_dg_sha224_rsa_2048_sha1
+bin/personhood-aa/aa_dg_sha224_rsa_2048_sha256
+bin/personhood-aa/aa_dg_sha224_ecdsa_p256_sha1
+bin/personhood-aa/aa_dg_sha224_ecdsa_p256_sha224
+bin/personhood-aa/aa_dg_sha224_ecdsa_p256_sha256
+bin/personhood-aa/aa_dg_sha224_ecdsa_p256_sha384
+bin/personhood-aa/aa_dg_sha224_ecdsa_p256_sha512
+bin/personhood-aa/aa_dg_sha256_rsa_1024_sha1
+bin/personhood-aa/aa_dg_sha256_rsa_1024_sha256
+bin/personhood-aa/aa_dg_sha256_rsa_1536_sha1
+bin/personhood-aa/aa_dg_sha256_rsa_1536_sha256
+bin/personhood-aa/aa_dg_sha256_rsa_2048_sha1
+bin/personhood-aa/aa_dg_sha256_rsa_2048_sha256
+bin/personhood-aa/aa_dg_sha256_ecdsa_p256_sha1
+bin/personhood-aa/aa_dg_sha256_ecdsa_p256_sha224
+bin/personhood-aa/aa_dg_sha256_ecdsa_p256_sha256
+bin/personhood-aa/aa_dg_sha256_ecdsa_p256_sha384
+bin/personhood-aa/aa_dg_sha256_ecdsa_p256_sha512
+bin/personhood-aa/aa_dg_sha384_rsa_1024_sha1
+bin/personhood-aa/aa_dg_sha384_rsa_1024_sha256
+bin/personhood-aa/aa_dg_sha384_rsa_1536_sha1
+bin/personhood-aa/aa_dg_sha384_rsa_1536_sha256
+bin/personhood-aa/aa_dg_sha384_rsa_2048_sha1
+bin/personhood-aa/aa_dg_sha384_rsa_2048_sha256
+bin/personhood-aa/aa_dg_sha384_ecdsa_p256_sha1
+bin/personhood-aa/aa_dg_sha384_ecdsa_p256_sha224
+bin/personhood-aa/aa_dg_sha384_ecdsa_p256_sha256
+bin/personhood-aa/aa_dg_sha384_ecdsa_p256_sha384
+bin/personhood-aa/aa_dg_sha384_ecdsa_p256_sha512
+bin/personhood-aa/aa_dg_sha512_rsa_1024_sha1
+bin/personhood-aa/aa_dg_sha512_rsa_1024_sha256
+bin/personhood-aa/aa_dg_sha512_rsa_1536_sha1
+bin/personhood-aa/aa_dg_sha512_rsa_1536_sha256
+bin/personhood-aa/aa_dg_sha512_rsa_2048_sha1
+bin/personhood-aa/aa_dg_sha512_rsa_2048_sha256
+bin/personhood-aa/aa_dg_sha512_ecdsa_p256_sha1
+bin/personhood-aa/aa_dg_sha512_ecdsa_p256_sha224
+bin/personhood-aa/aa_dg_sha512_ecdsa_p256_sha256
+bin/personhood-aa/aa_dg_sha512_ecdsa_p256_sha384
+bin/personhood-aa/aa_dg_sha512_ecdsa_p256_sha512
