@@ -318,6 +318,87 @@ func (v *Verifier) Verify(ctx context.Context, b Bundle, bindData [BindDataSize]
 	return res, nil
 }
 
+// ── Linking an OpenLine chain (docs/zk-passport.md) ─────────────────────────
+
+// ChainScopePrefix + chain id is the label of the nullifier scope an
+// OpenLine chain registers passports under (OpenLine chain/passport.go,
+// PassportScope).
+const ChainScopePrefix = "openline:passport:v1:"
+
+// ChainScope is Poseidon2(pack_be(ChainScopePrefix + chainID)).
+func ChainScope(chainID string) [FieldSize]byte {
+	return FieldBytes(Poseidon2Hash(PackBEBytesIntoFields([]byte(ChainScopePrefix + chainID))))
+}
+
+// ErrLink: the chain-link sub-proof is missing, malformed, not of this
+// passport, for another scope or session, or does not verify.
+var ErrLink = errors.New("zkproof: chain-link proof does not match")
+
+// VerifyLink checks a second bind sub-proof ("link") made from the same
+// integrity commitment as b, for scope (an OpenLine chain's, ChainScope),
+// committing to the same bindData, and returns its nullifier: what that
+// chain's passport registry keys this passport by. b must already have
+// passed Verify (VerifyLink only checks the link and its chaining into b).
+//
+// What it proves: the passport behind b, under scope, has that nullifier.
+// The salted commitments chain the link to b's integrity proof, which only
+// the holder of that passport's chip data could open, and bindData ties it
+// to this session as b's own bind proof is.
+func (v *Verifier) VerifyLink(ctx context.Context, b Bundle, link SubProof, scope [FieldSize]byte, bindData [BindDataSize]byte) ([FieldSize]byte, error) {
+	var none [FieldSize]byte
+	if link.Circuit != BindCircuit {
+		return none, fmt.Errorf("%w: circuit %q is not bind", ErrLink, link.Circuit)
+	}
+	lf, err := fields(link, "bind")
+	if err != nil {
+		return none, fmt.Errorf("%w: %v", ErrLink, err)
+	}
+	integ, err := fields(b.Integrity, "integrity")
+	if err != nil {
+		return none, fmt.Errorf("%w: %v", ErrLink, err)
+	}
+	switch {
+	case lf[0] != integ[1]:
+		return none, fmt.Errorf("%w: not chained from this passport's integrity proof", ErrLink)
+	case lf[2] != scope || lf[3] != ([FieldSize]byte{}):
+		return none, fmt.Errorf("%w: another scope", ErrLink)
+	case scope == v.Scope:
+		return none, fmt.Errorf("%w: the link scope is the issuer's own", ErrLink)
+	case lf[4] != ParamCommitment(bindData):
+		return none, fmt.Errorf("%w: bound to another session", ErrLink)
+	}
+	date, ok := small(lf[1])
+	now := time.Now
+	if v.Now != nil {
+		now = v.Now
+	}
+	skew := v.MaxDateSkew
+	if skew == 0 {
+		skew = 36 * time.Hour
+	}
+	if d := time.Duration(now().Unix()-date) * time.Second; !ok || d > skew || d < -skew {
+		return none, fmt.Errorf("%w: %v", ErrLink, ErrStaleDate)
+	}
+	nt, ok := small(lf[5])
+	if !ok || !(nt == NullifierNonSalted || nt == NullifierNonSaltedMock && v.AllowMock) {
+		return none, fmt.Errorf("%w: nullifier type %x", ErrLink, lf[5])
+	}
+	if lf[6] == none {
+		return none, fmt.Errorf("%w: empty nullifier", ErrLink)
+	}
+	vk, ok := v.VKs[BindCircuit]
+	if !ok {
+		return none, fmt.Errorf("%w: %q", ErrUnknownCircuit, BindCircuit)
+	}
+	if err := v.bbVerify(ctx, vk, link); err != nil {
+		if errors.Is(err, ErrProofInvalid) {
+			return none, fmt.Errorf("%w: %v", ErrLink, err)
+		}
+		return none, err
+	}
+	return lf[6], nil
+}
+
 // circuitMatchesStage stops a valid proof of one stage being passed off as
 // another (their public-input shapes partly coincide).
 func circuitMatchesStage(name, stage string) bool {

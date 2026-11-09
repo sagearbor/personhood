@@ -149,6 +149,16 @@ type ZKConfig struct {
 	ArtifactsDir     fs.FS
 	// AllowMock accepts zkPassport's mock state "ZKR". Tests only.
 	AllowMock bool
+	// LinkChainID, when set, links every enrollment to that OpenLine chain
+	// (docs/zk-passport.md "Linking an OpenLine chain"): the wallet also
+	// proves a "link" sub-proof, a second bind from the same integrity
+	// commitment for the chain's nullifier scope, and the credential's
+	// attestation digest carries the passport's nullifier on that chain
+	// (LinkDigest). The chain then counts the passport once whether it
+	// arrives through this issuer or is registered on the chain itself.
+	// Enrollments without the link are refused with zk_link_missing (update
+	// the app): an unlinked passport credential could count twice there.
+	LinkChainID string
 }
 
 // ZKMethod is the "document-chip-zk" anchor.
@@ -159,6 +169,7 @@ type ZKMethod struct {
 	challenges *zkChallengeStore
 	sem        chan struct{}
 	random     func([]byte) error
+	linkScope  [zkproof.FieldSize]byte // zkproof.ChainScope(LinkChainID) when linking
 }
 
 // NewZKMethod builds the method. It panics on a missing registry, bb path
@@ -167,7 +178,7 @@ func NewZKMethod(cfg Config, zk ZKConfig, onReview func(ReviewCase)) *ZKMethod {
 	if zk.Registry == nil || zk.BB == "" || zk.Circuits == nil || len(zk.VKs) == 0 {
 		panic("document-chip-zk: Registry, BB and the circuit set are required")
 	}
-	return &ZKMethod{
+	m := &ZKMethod{
 		common: common{cfg: cfg, logFlag: onReview},
 		zk:     zk,
 		verifier: &zkproof.Verifier{
@@ -181,6 +192,23 @@ func NewZKMethod(cfg Config, zk ZKConfig, onReview func(ReviewCase)) *ZKMethod {
 			return err
 		},
 	}
+	if zk.LinkChainID != "" {
+		m.linkScope = zkproof.ChainScope(zk.LinkChainID)
+	}
+	return m
+}
+
+// LinkPrefix starts a linked attestation digest; OpenLine's chain parses it
+// (chain/passport_link.go ParsePassportLink).
+const LinkPrefix = "openline-passport-link/v1:"
+
+// LinkDigest is the attestation digest of a linked enrollment:
+//
+//	"openline-passport-link/v1:" <chain scope, 64 hex> ":" <chain nullifier, 64 hex> ":" <audit digest>
+//
+// The audit digest is the one an unlinked enrollment records.
+func LinkDigest(scope, nullifier [zkproof.FieldSize]byte, audit string) string {
+	return LinkPrefix + hex.EncodeToString(scope[:]) + ":" + hex.EncodeToString(nullifier[:]) + ":" + audit
 }
 
 func (m *ZKMethod) Metadata() types.MethodMetadata {
@@ -227,23 +255,28 @@ func (m *ZKMethod) BeginCeremony(_ context.Context, cc types.CeremonyContext) (t
 	data := zkproof.BindData(ch, holder)
 	aa := zkproof.AAChallenge(ch)
 	scope := zkproof.ServiceScope()
-	return types.ChallengeData{
-		Type: "document-chip-zk-challenge",
-		Payload: map[string]any{
-			"bind_data_hex": hex.EncodeToString(data[:]),
-			// The 8 bytes the chip signs for Active Authentication, derived
-			// from the session challenge (zkproof.AAChallenge).
-			"aa_challenge_hex":    hex.EncodeToString(aa[:]),
-			"service_scope":       "0x" + hex.EncodeToString(scope[:]),
-			"service_subscope":    "0x" + strings.Repeat("0", 64),
-			"registry_url":        m.url("registry"),
-			"registry_root":       m.zk.Registry.Root,
-			"circuits_url":        m.url("circuits"),
-			"face_bind_url":       m.cfg.FaceBindURL,
-			"complete_endpoint":   "/v1/methods/" + ZKMethodID + "/complete",
-			"max_date_skew_hours": 36,
-		},
-	}, nil
+	payload := map[string]any{
+		"bind_data_hex": hex.EncodeToString(data[:]),
+		// The 8 bytes the chip signs for Active Authentication, derived
+		// from the session challenge (zkproof.AAChallenge).
+		"aa_challenge_hex":    hex.EncodeToString(aa[:]),
+		"service_scope":       "0x" + hex.EncodeToString(scope[:]),
+		"service_subscope":    "0x" + strings.Repeat("0", 64),
+		"registry_url":        m.url("registry"),
+		"registry_root":       m.zk.Registry.Root,
+		"circuits_url":        m.url("circuits"),
+		"face_bind_url":       m.cfg.FaceBindURL,
+		"complete_endpoint":   "/v1/methods/" + ZKMethodID + "/complete",
+		"max_date_skew_hours": 36,
+	}
+	if m.zk.LinkChainID != "" {
+		// The wallet proves bind a second time from the same integrity
+		// commitment, for this scope, with the same bind data, and sends it
+		// as proofs.link.
+		payload["link_chain_id"] = m.zk.LinkChainID
+		payload["link_scope"] = "0x" + hex.EncodeToString(m.linkScope[:])
+	}
+	return types.ChallengeData{Type: "document-chip-zk-challenge", Payload: payload}, nil
 }
 
 func parseSubProof(payload map[string]any, stage string) (zkproof.SubProof, bool) {
@@ -285,6 +318,8 @@ func zkReason(err error) string {
 		return "zk_mock_document"
 	case errors.Is(err, zkproof.ErrMalformed):
 		return "zk_bundle_malformed"
+	case errors.Is(err, zkproof.ErrLink):
+		return "zk_link_invalid"
 	case errors.Is(err, zkproof.ErrProofInvalid):
 		return "zk_proof_invalid"
 	default:
@@ -320,6 +355,20 @@ func (m *ZKMethod) CompleteCeremony(ctx context.Context, cc types.CeremonyContex
 	if !okAll {
 		return fail(ZKMethodID, "zk_bundle_malformed"), nil
 	}
+	var link zkproof.SubProof
+	if m.zk.LinkChainID != "" {
+		if proofs, _ := resp.Payload["proofs"].(map[string]any); proofs["link"] == nil {
+			// An app that does not prove the chain link yet: update it, or
+			// another way in. Without the link this passport could count
+			// twice on the chain.
+			return fail(ZKMethodID, "zk_link_missing"), nil
+		}
+		sp, ok := parseSubProof(resp.Payload, "link")
+		if !ok {
+			return fail(ZKMethodID, "zk_bundle_malformed"), nil
+		}
+		link = sp
+	}
 
 	// Cheap face-bind shape check before spending CPU on proofs.
 	if fb, ok := parseFaceBind(resp.Payload); !ok {
@@ -333,7 +382,12 @@ func (m *ZKMethod) CompleteCeremony(ctx context.Context, cc types.CeremonyContex
 	case <-ctx.Done():
 		return types.MethodResult{}, ctx.Err()
 	}
-	res, err := m.verifier.Verify(ctx, b, zkproof.BindData(ch.challenge, ch.holder), zkproof.AAChallenge(ch.challenge))
+	bindData := zkproof.BindData(ch.challenge, ch.holder)
+	res, err := m.verifier.Verify(ctx, b, bindData, zkproof.AAChallenge(ch.challenge))
+	var chainNullifier [zkproof.FieldSize]byte
+	if err == nil && m.zk.LinkChainID != "" {
+		chainNullifier, err = m.verifier.VerifyLink(ctx, b, link, m.linkScope, bindData)
+	}
 	<-m.sem
 	if err != nil {
 		if reason := zkReason(err); reason != "" {
@@ -352,11 +406,15 @@ func (m *ZKMethod) CompleteCeremony(ctx context.Context, cc types.CeremonyContex
 	if !res.ActiveAuth {
 		strength = ZKPassiveStrength
 	}
+	digest := digestOf(cc.SessionID, "zk", hex.EncodeToString(res.RegistryRoot[:]), b.DSC.Circuit, b.ID.Circuit, b.Integrity.Circuit, b.AA.Circuit)
+	if m.zk.LinkChainID != "" {
+		digest = LinkDigest(m.linkScope, chainNullifier, digest)
+	}
 	return types.MethodResult{
 		Success:            true,
 		MethodID:           ZKMethodID,
 		VerifiedAt:         m.now(),
-		AttestationDigest:  digestOf(cc.SessionID, "zk", hex.EncodeToString(res.RegistryRoot[:]), b.DSC.Circuit, b.ID.Circuit, b.Integrity.Circuit, b.AA.Circuit),
+		AttestationDigest:  digest,
 		VerifiedIdentifier: identifier,
 		Strength:           strength,
 	}, nil
