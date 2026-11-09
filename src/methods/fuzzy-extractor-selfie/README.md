@@ -17,6 +17,29 @@ for and no vendor credential to configure.
 | Airdrop test | ✅ passes (no ID/bank/address required) |
 | Platforms | any (needs a camera, on the client) |
 
+## Two modes
+
+- `SELFIE_ANCHOR=1` (the phone-ready mode): the web app runs a real
+  on-device face model (MediaPipe Face Landmarker + dlib's face-recognition
+  ResNet via face-api) and a randomized active-liveness ceremony; the issuer
+  checks a signed challenge token and the ceremony timing (`liveness.go`),
+  keeps the accumulator in Firestore or Redis, and advertises strength 50.
+  What it proves, measured error rates and the threat model:
+  [docs/selfie-anchor.md](../../../docs/selfie-anchor.md). Short version:
+  useful against casual double enrollment in a small cohort, not a
+  Sybil-resistant anchor, because a browser cannot prove its camera is real.
+- `SELFIE_NATIVE=1` on top of `SELFIE_ANCHOR=1` (needs
+  `ANDROID_KEY_ATTESTATION_PACKAGE`): also registers
+  `fuzzy-extractor-selfie-native` (`native.go`, `motion.go`), strength 55,
+  for the OpenLine Android wallet: the same template and accumulator, plus
+  Android Key Attestation over a signed ceremony summary and
+  camera/gyroscope/screen-flash consistency checks. Native-only failures
+  fall back to this web method. See the doc's "Native ceremony" section.
+- `FUZZY_EXTRACTOR_ENABLED=1` (the original dev mode, described below):
+  template only, no liveness, in-memory accumulator, strength 70.
+
+The two flags are exclusive.
+
 ## Flow (selfie → on-device template → fuzzy-extractor dedup)
 
 1. **BeginCeremony** returns instructions only — unlike the nonce-based
@@ -99,23 +122,21 @@ alone cannot mint a second nullifier for the same person. See
 
 ## What this module does NOT do
 
-- **No on-device ML.** Face detection, liveness checks, and embedding
-  extraction happen in the client app (`app/web` or a future mobile
-  shell), not here. This module accepts an already-binarized template and
+- **No on-device ML here.** Face detection, liveness checks, and embedding
+  extraction happen in the client app (`app/web/lib/face`), not in this
+  module. This module accepts an already-binarized template and
   is agnostic to how it was produced — tests use
   `RandomTemplateForTesting()` / `NoisyTemplateForTesting()` as stand-ins,
   mirroring `SignDeviceTokenForTesting` in `app-attest-device` and
   `SignWebhookForTesting` in `plaid-bank-link`.
-- **No liveness/anti-spoof check.** A photo-of-a-photo attack is not
-  defended against at this layer; a real deployment needs a liveness
-  ceremony (blink/turn prompts, or a proper passive-liveness model) upstream
-  of the template this method receives. Flagged as v0.2 work.
-- **No cross-instance accumulator.** Like every other `InMemory*` store in
-  this repo, `InMemoryAccumulator` does not survive a restart and is not
-  shared across replicas. A production deployment needs a shared backend
-  (see the Redis-backed stores added for `SessionStore` /
-  `email.TokenStore` / `sms.OTPStore` / `government-id-liveness.ResultStore`
-  as the template to follow).
+- **Liveness is client-side.** With `SELFIE_ANCHOR=1` the server issues
+  the challenge order and checks the token and timings, but every
+  measurement is made by the client; a scripted client or a virtual camera
+  is not stopped (docs/selfie-anchor.md).
+- **Durable accumulators live in the server.** `src/server/accumulator_store.go`
+  has Firestore and Redis implementations used under `SELFIE_ANCHOR=1`.
+  Enrollment is serialized per process; several issuer replicas sharing one
+  store could race (the reference deployment runs one instance).
 
 ## Configuration
 

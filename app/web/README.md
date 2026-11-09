@@ -1,6 +1,6 @@
 # app/web — Personhood enrollment PWA
 
-A Next.js 14 App Router application that drives an end-user through the
+A Next.js 16 App Router application that drives an end-user through the
 Personhood enrollment ceremony: email magic link → SMS OTP → government ID +
 selfie (Persona) → issued W3C Verifiable Credential.
 
@@ -62,8 +62,9 @@ app/web/
 │       └── CredentialStep.tsx — issue + view + save to IndexedDB
 ├── lib/
 │   ├── api.ts            — Personhood server client (fetch-based)
-│   ├── storage.ts        — IndexedDB wrapper (credentials + session checkpoint)
-│   └── webauthn.ts       — registerDevicePasskey + verifyDevicePasskey
+│   ├── storage.ts        — IndexedDB wrapper (credentials, session checkpoint, holder key, passkey id)
+│   ├── holderkey.ts      — non-extractable Ed25519 holder key; signs the issuer's holder proof
+│   └── webauthn.ts       — registerDevicePasskey + verifyDevicePasskey (biometric lock on the holder key)
 └── public/
     └── sw.js             — service worker (offline shell + installability)
 ```

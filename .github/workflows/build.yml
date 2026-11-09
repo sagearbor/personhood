@@ -16,6 +16,13 @@ on:
 jobs:
   go:
     runs-on: ubuntu-latest
+    # Real Redis for the Redis-backed store tests (sessions, revocations,
+    # identifier seeds), which skip without REDIS_TEST_ADDR.
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -34,6 +41,8 @@ jobs:
         run: cd src/methods/sms && go test -race -count=1 -tags twilio ./...
       - name: Test server with both tags
         run: cd src/server && go test -race -count=1 -tags 'sendgrid twilio' ./...
+        env:
+          REDIS_TEST_ADDR: 127.0.0.1:6379
       - name: Build server (production tags)
         run: cd src/server && go build -tags 'sendgrid twilio' -o /tmp/personhood-server ./cmd/server
       # Round-1 path against a real server process (also covered by tests/,

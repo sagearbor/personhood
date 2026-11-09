@@ -42,13 +42,15 @@ const (
 	ReplyInteger
 	ReplyBulk
 	ReplyNil
+	ReplyArray
 )
 
 // Reply is a parsed RESP2 server reply.
 type Reply struct {
-	Type ReplyType
-	Str  string // status text, or the bulk string payload
-	Int  int64
+	Type  ReplyType
+	Str   string // status text, or the bulk string payload
+	Int   int64
+	Array []Reply // elements of an array reply (e.g. LRANGE)
 }
 
 // Client is a minimal Redis client. Construct with New or ParseURL.
@@ -274,8 +276,25 @@ func readReply(r *bufio.Reader) (Reply, error) {
 			return Reply{}, fmt.Errorf("redisclient: read bulk payload: %w", err)
 		}
 		return Reply{Type: ReplyBulk, Str: string(buf[:n])}, nil
+	case '*':
+		n, err := strconv.Atoi(line[1:])
+		if err != nil {
+			return Reply{}, fmt.Errorf("redisclient: bad array length %q: %w", line, err)
+		}
+		if n < 0 {
+			return Reply{Type: ReplyNil}, nil
+		}
+		arr := make([]Reply, 0, n)
+		for i := 0; i < n; i++ {
+			el, err := readReply(r)
+			if err != nil {
+				return Reply{}, err
+			}
+			arr = append(arr, el)
+		}
+		return Reply{Type: ReplyArray, Array: arr}, nil
 	default:
-		return Reply{}, fmt.Errorf("redisclient: unsupported reply type %q (only +/-/:/$ are used by this client's command set)", line[0])
+		return Reply{}, fmt.Errorf("redisclient: unsupported reply type %q (only +/-/:/$/* are used by this client's command set)", line[0])
 	}
 }
 

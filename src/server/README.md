@@ -13,8 +13,16 @@ per-method state live in memory. Set `REDIS_URL` (e.g.
 DB index) to switch `SessionStore`, `email.TokenStore`, `sms.OTPStore`, and
 `government-id-liveness`'s `ResultStore` to Redis-backed implementations, so
 sessions and ceremony state survive restarts and are shared across
-horizontally scaled replicas. Unset (the default) keeps everything in
-memory — no code change, no Redis dependency for round-1-scale deployments.
+horizontally scaled replicas. The status-list slots, revocations and
+one-inbox-one-voter seeds move to Redis too (`revocation_redis.go`,
+`identifier_redis.go`); those must outlive restarts, so the Redis server needs
+disk persistence (the issuer kit, `scripts/issuer-kit/`, runs it with an
+append-only file). `FIRESTORE_PROJECT_ID` takes priority over `REDIS_URL`.
+Unset (the default) keeps everything in memory — no code change, no Redis
+dependency for round-1-scale deployments.
+
+To run an independent issuer on any server with Docker, see
+[docs/RUN_AN_ISSUER.md](../../docs/RUN_AN_ISSUER.md).
 
 ## Run locally
 
@@ -52,7 +60,7 @@ All requests/responses are JSON unless noted.
 | POST | `/v1/methods/{methodId}/begin` | Body: `{session_id, user_input}`. Returns the method's `ChallengeData` with secret fields (`magic_link_url`) redacted unless `DEV_EXPOSE_CHALLENGE_SECRETS=1`. |
 | POST | `/v1/methods/{methodId}/complete` | Body: `{session_id, response}`. Records the result on the session and returns `{result, session}`. |
 | GET  | `/v1/methods/email/verify?session=...&token=...` | Magic-link landing for the email method; calls `CompleteCeremony` internally and renders an HTML success/failure page. |
-| POST | `/v1/credentials/issue` (and `/credentials/issue` alias) | Body: `{session_id}`. Issues the W3C VC for the session's accumulated `VerifiedMethods`. Single-use per session. |
+| POST | `/v1/credentials/issue` (and `/credentials/issue` alias) | Body: `{session_id, holder_proof_b64?}`. `holder_proof_b64` is the holder key's Ed25519 signature over the `holder_proof_message` that `/enrollment/start` returned; required with `REQUIRE_HOLDER_POP`, checked whenever sent. Issues the W3C VC for the session's accumulated `VerifiedMethods`. Single-use per session. |
 | GET  | `/v1/status-list/{listId}` | Public W3C Status List 2021 credential (v0.1 publishes an empty list). |
 
 ### Request flow
@@ -119,6 +127,15 @@ show the user what mode they are in.
   `nullifierBinding` derives from it, so re-enrolling the same inbox on a new
   device key is a re-issue. Throwaway inboxes are still Sybil-able; only an
   anchor method stops one person holding many.
+- **Per-identifier send cap** (`sendlimit.go`): each email address or phone
+  number gets at most 5 verification messages an hour, whoever asks (429
+  `identifier_rate_limited`), keyed by a hash of the normalized identifier,
+  in memory. Follows `RATE_LIMIT=off`.
+- **Holder proof-of-possession** (`holderpop.go`): a declared holder key
+  must sign `personhood-holder-pop:v1:<issuer DID>:<session id>` before the
+  credential is bound to it, so nobody can get a credential bound to a key
+  they don't hold. Checked whenever sent; required only with
+  `REQUIRE_HOLDER_POP=1` (off until the OpenLine wallet sends it).
 - **Post-quantum companion signature (experimental, off by default)**: with
   `ISSUER_MLDSA_SK` (base64 32-byte seed) set, every credential also carries
   an ML-DSA-65 signature in `proof.pqProof`, the DID document publishes the

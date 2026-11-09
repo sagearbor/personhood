@@ -62,9 +62,13 @@ func TestSendGridSender_Send_Success(t *testing.T) {
 	if len(captured.Content) != 2 {
 		t.Fatalf("expected text/plain + text/html parts, got %d", len(captured.Content))
 	}
-	// The link must appear verbatim in BOTH content parts.
+	// The link must appear in BOTH content parts (HTML-escaped in the HTML).
 	for _, c := range captured.Content {
-		if !strings.Contains(c.Value, "session=s&token=t") {
+		want := "session=s&token=t"
+		if c.Type == "text/html" {
+			want = "session=s&amp;token=t"
+		}
+		if !strings.Contains(c.Value, want) {
 			t.Errorf("%s content missing the link: %s", c.Type, c.Value)
 		}
 	}

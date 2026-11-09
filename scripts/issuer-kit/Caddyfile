@@ -1,0 +1,6 @@
+# HTTPS for the issuer. Caddy gets and renews the certificate by itself; the
+# domain must already point at this machine (ports 80 and 443 open).
+{$ISSUER_DOMAIN} {
+	encode gzip
+	reverse_proxy issuer:8080
+}

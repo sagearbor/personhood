@@ -39,6 +39,7 @@ Sorted by the highest score any agent gave. Anchors satisfy `anchor_required: tr
 | `government-id-liveness` | 90 | — | 90 | $1.00 | med | ❌ | 🌟 | Passport/license + selfie liveness via Persona/Onfido. **Ship next as anchor #2.** |
 | `plaid-bank-link` | 90 | — | 88 | $1.50 | med | ❌ | 🌟 | Bank OAuth via Plaid. **Ship next as anchor #3.** Fast integration, well-understood. |
 | `in-person-partner-location` | 85 | — | — | $5.00 | high | ✅ | 🤔 | UPS/post office/NGO field agent enrollment. The airdrop-test answer; ops-heavy. |
+| `document-chip` / `document-signed-qr` | 80 / 60 | 80 / 60 | 80 / 60 | $0.00 | low | ⚠️ | ✅ | **Built (behind `DOCUMENT_CHIP_ANCHOR=1`).** ePassport/eID chip read over NFC, passive authentication against the ICAO/German master list, Active Authentication against clones, face bound to the chip photo on the phone; signed-QR national IDs (Aadhaar first) by camera. No vendor. Unique per document. Passive-only chips: 70. See `docs/document-chip-anchor.md`. |
 | `government-credential-federation` | 85 | — | — | $1.00 | med | ❌ | ✅ | ID.me / Login.gov SSO. Cheap to integrate where supported (US-centric). |
 | `live-video-review` | 80 | — | 82 | $8.00 | high | ⚠️ | 🤔 | Human reviewer on Zoom-style call. Defeats deepfakes; expensive; queue waits. |
 | `video-notary` | 75 | — | — | $25 | high | ❌ | ⏸ | RON. Legal weight, but expensive and US-state-specific. |
@@ -59,6 +60,7 @@ Sorted by the highest score any agent gave. Supplementaries never satisfy `ancho
 | `paid-billing-card` | — | — | 35 | $0.30 | med | ❌ | 🌟 | Real card pre-auth (Twitter Blue / OpenAI tier-1 pattern). **Strongest single supplementary; ship next.** |
 | `credit-header-triangulation` | 35 | — | — | $0.75 | low | ❌ | ⏸ | LexisNexis-style depth check. Synthetic-ID detector; thin-file exclusion. |
 | `social-vouching-graph` | — | 35 | — | $0.00 | high | ✅ | ✅ | BrightID web-of-trust. Airdrop-compatible; cold-start hard; great for v0.3 community drive. |
+| `in-person-vouch` | 55 | — | — | $0.00 | high | ✅ | ✅ | **Implemented** (`docs/07-…`). K anchored vouchers confirm a live QR round trip, plus a selfie dedupe in the same session. Strength rests on voucher accountability (quota, strikes, suspension), not proximity, which a relay can fake. |
 | `zk-credential-aggregation` | — | 35 | — | $0.02 | med | ⚠️ | 🤔 | Sismo/Privado ID ZK stamp predicates. Privacy-preserving; same source-weakness as stamp-stacking. |
 | `tax-id-ssn-match` | 30 | — | — | $0.50 | low | ❌ | ❌ | Post-Equifax-breach this is mostly broken. Skip. |
 | `property-mortgage-records-match` | 30 | — | — | $0.50 | low | ❌ | ⏸ | LexisNexis property records. Excludes renters; controversial source. |

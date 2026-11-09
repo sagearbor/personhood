@@ -12,6 +12,7 @@ require (
 	github.com/sagearbor/personhood/src/credential/pq v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/app-attest-device v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/captcha-turnstile v0.0.0-00010101000000-000000000000
+	github.com/sagearbor/personhood/src/methods/document-chip v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/email v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/email-tier v0.0.0-00010101000000-000000000000
 	github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie v0.0.0-00010101000000-000000000000
@@ -40,6 +41,7 @@ replace (
 	github.com/sagearbor/personhood/src/credential/pq => ../credential/pq
 	github.com/sagearbor/personhood/src/methods/app-attest-device => ../methods/app-attest-device
 	github.com/sagearbor/personhood/src/methods/captcha-turnstile => ../methods/captcha-turnstile
+	github.com/sagearbor/personhood/src/methods/document-chip => ../methods/document-chip
 	github.com/sagearbor/personhood/src/methods/email => ../methods/email
 	github.com/sagearbor/personhood/src/methods/email-tier => ../methods/email-tier
 	github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie => ../methods/fuzzy-extractor-selfie

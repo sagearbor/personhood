@@ -63,6 +63,11 @@ keygen() {
     fs.writeFileSync(process.argv[1],privateKey.export({type:"pkcs8",format:"pem"}));
     process.stdout.write(publicKey.export({type:"spki",format:"der"}).subarray(12).toString("base64"));' "$1"
 }
+# sign_b64 PEMFILE MESSAGE: prints the base64 ed25519 signature.
+sign_b64() {
+  node -e 'const c=require("crypto"),fs=require("fs");
+    process.stdout.write(c.sign(null,Buffer.from(process.argv[2],"utf8"),c.createPrivateKey(fs.readFileSync(process.argv[1]))).toString("base64"));' "$1" "$2"
+}
 # sign PEMFILE MESSAGE: prints the hex ed25519 signature.
 sign() {
   node -e 'const c=require("crypto"),fs=require("fs");
@@ -101,7 +106,7 @@ SELF=$(json "$WORK/health.json" 'd["selfAddress"]')
 # enroll EMAIL NAME: enrolls EMAIL under a fresh holder key; writes
 # $WORK/NAME.pem (holder key) and $WORK/NAME.json (credential).
 enroll() {
-  local email=$1 name=$2 pub session link
+  local email=$1 name=$2 pub session link proof
   pub=$(keygen "$WORK/$name.pem")
   python3 -c 'import json,sys; d={"platform":"e2e-openline","holder_public_key_b64":sys.argv[2]}
 if sys.argv[1]: d["invite_code"]=sys.argv[1]
@@ -114,8 +119,12 @@ print(json.dumps(d))' "$INVITE" "$pub" >"$WORK/start.json"
   link=$(json "$WORK/begin.json" 'd["challenge"]["payload"].get("magic_link_url","")')
   [[ -n "$link" ]] || die "no magic link returned — is the issuer in test mode?"
   curl -sf "$link" | grep -q "Email verified" || die "magic link click"
+  # Holder proof-of-possession: sign the issuer's holder_proof_message (an
+  # issuer that predates it returns none, and we issue without a proof).
+  proof=$(json "$WORK/sess.json" 'd.get("holder_proof_message","")')
+  [[ -z "$proof" ]] || proof=$(sign_b64 "$WORK/$name.pem" "$proof")
   curl -sf -X POST "$ISSUER/v1/credentials/issue" -H 'Content-Type: application/json' \
-    -d "{\"session_id\":\"$session\"}" >"$WORK/issue.json" || die "credentials/issue"
+    -d "{\"session_id\":\"$session\",\"holder_proof_b64\":\"$proof\"}" >"$WORK/issue.json" || die "credentials/issue"
   python3 -c 'import json,sys; json.dump(json.load(open(sys.argv[1]))["credential"], open(sys.argv[2],"w"))' "$WORK/issue.json" "$WORK/$name.json"
   echo "credential $(json "$WORK/$name.json" 'd["id"]') for $(json "$WORK/$name.json" 'd["credentialSubject"]["id"]')"
 }

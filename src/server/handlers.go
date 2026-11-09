@@ -8,15 +8,20 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
+	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
 	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
 	ipasnmethod "github.com/sagearbor/personhood/src/methods/ip-asn-reputation"
+	socialvouching "github.com/sagearbor/personhood/src/methods/social-vouching"
 )
 
 // startEnrollmentRequest is the JSON body of POST /enrollment/start.
@@ -44,6 +49,10 @@ type startEnrollmentResponse struct {
 	IssuerDID        types.DID       `json:"issuer_did"`
 	ExpiresAt        time.Time       `json:"expires_at"`
 	AvailableMethods []methodSummary `json:"available_methods"`
+	// HolderProofMessage is set when the request declared a holder key: the
+	// exact UTF-8 string the client signs with that key and sends back as
+	// holder_proof_b64 at issuance (see holderpop.go).
+	HolderProofMessage string `json:"holder_proof_message,omitempty"`
 }
 
 // methodSummary is the projection of MethodMetadata returned to clients on
@@ -81,6 +90,9 @@ type completeMethodRequest struct {
 type completeMethodResponse struct {
 	Result  types.MethodResult `json:"result"`
 	Session SessionView        `json:"session"`
+	// FaceMatch is set (NO_FALSE_LOCKOUT) when a selfie matched an enrolled
+	// face: the ways forward instead of a dead end.
+	FaceMatch *faceMatchRouting `json:"face_match,omitempty"`
 }
 
 // serverConfigResponse is the JSON body of GET /v1/config — the public,
@@ -115,6 +127,26 @@ type serverConfigResponse struct {
 	// phone gets the same nullifierBinding back instead of a new one.
 	IdentifierDedup bool `json:"identifier_dedup"`
 
+	// HolderPoPRequired reports whether issuance needs holder_proof_b64
+	// from sessions that declared a holder key (REQUIRE_HOLDER_POP).
+	HolderPoPRequired bool `json:"holder_pop_required"`
+
+	// HolderRevocation reports whether equivocation proofs and holder bans
+	// are on (HOLDER_REVOCATION_ENABLED).
+	HolderRevocation bool `json:"holder_revocation"`
+
+	// InPersonVouch reports whether the in-person vouch ceremony routes are
+	// mounted (IN_PERSON_VOUCH_ENABLED). The web app shows "Vouch for
+	// someone" only then.
+	InPersonVouch bool `json:"in_person_vouch"`
+
+	// NoFalseLockout reports whether face matches are routed and identity
+	// recovery is on (NO_FALSE_LOCKOUT); ManualReview whether the review
+	// queue and appeals are mounted; RecoveryDelaySeconds the cancel window.
+	NoFalseLockout       bool  `json:"no_false_lockout"`
+	ManualReview         bool  `json:"manual_review"`
+	RecoveryDelaySeconds int64 `json:"recovery_delay_seconds,omitempty"`
+
 	// PQProof reports whether credentials carry an ML-DSA-65 signature in
 	// proof.pqProof next to the Ed25519 one (ISSUER_MLDSA_SK set).
 	PQProof bool `json:"pq_proof"`
@@ -123,6 +155,11 @@ type serverConfigResponse struct {
 // issueCredentialRequest is the JSON body of POST /v1/credentials/issue.
 type issueCredentialRequest struct {
 	SessionID string `json:"session_id"`
+	// HolderProofB64 is an Ed25519 signature, by the session's holder key,
+	// over the session's holder_proof_message. Required when the server
+	// runs with RequireHolderPoP and the session declared a holder key;
+	// verified whenever present.
+	HolderProofB64 string `json:"holder_proof_b64,omitempty"`
 }
 
 type issueCredentialResponse struct {
@@ -150,6 +187,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		EmailDelivery:           s.emailDelivery,
 		SMSDelivery:             s.smsDelivery,
 		IdentifierDedup:         s.identifierKeys != nil,
+		HolderPoPRequired:       s.cfg.RequireHolderPoP,
+		HolderRevocation:        s.holders != nil,
+		InPersonVouch:           s.inPerson != nil,
+		NoFalseLockout:          s.lockout != nil,
+		ManualReview:            s.reviewsEnabled(),
+		RecoveryDelaySeconds:    recoveryDelaySeconds(s),
 		PQProof:                 s.issuerPQPublicKey != nil,
 	})
 }
@@ -188,13 +231,17 @@ func (s *Server) handleStartEnrollment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, startEnrollmentResponse{
+	resp := startEnrollmentResponse{
 		SessionID:        view.ID,
 		HolderDID:        view.HolderDID,
 		IssuerDID:        s.issuerDID,
 		ExpiresAt:        view.ExpiresAt,
 		AvailableMethods: s.methodSummaries(),
-	})
+	}
+	if holderPub != nil {
+		resp.HolderProofMessage = HolderPoPMessage(s.issuerDID, view.ID)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleBeginMethod(w http.ResponseWriter, r *http.Request) {
@@ -221,9 +268,22 @@ func (s *Server) handleBeginMethod(w http.ResponseWriter, r *http.Request) {
 	// canonical form (a phone number without its country code) is refused
 	// before anything is sent: it could be enrolled again under another
 	// spelling as a different person.
-	if kind := identifierKindForMethod(methodID); kind != "" && s.identifierKeys != nil {
+	if kind := identifierKindForMethod(methodID); identifierFromUserInput(kind) && s.identifierKeys != nil {
 		if _, err := normalizeIdentifier(kind, req.UserInput); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_identifier", err.Error())
+			return
+		}
+	}
+
+	if kind := identifierKindForMethod(methodID); identifierFromUserInput(kind) && s.identifierSends != nil {
+		if ok, wait := s.identifierSends.allow(s.identifierSendKey(kind, req.UserInput), s.nowFunc()); !ok {
+			secs := int(math.Ceil(wait.Seconds()))
+			if secs < 1 {
+				secs = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			writeError(w, http.StatusTooManyRequests, "identifier_rate_limited",
+				"this "+kind+" has been sent too many verification messages; try again later")
 			return
 		}
 	}
@@ -308,6 +368,28 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A method with prerequisites (the in-person-vouch anchor needs a
+	// selfie dedupe first, see inperson.go) is not run until the session
+	// holds one of them.
+	need := s.missingPrerequisite(methodID, sess)
+	if need != nil && s.lockout != nil && contains(need, fuzzyextractorselfie.MethodID) {
+		// A selfie that matched someone else's face, declined as "not me",
+		// is a dedupe that ran: the person continues with another anchor.
+		if _, declined, err := s.faceMatchDeclined(r.Context(), sess.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "store_failed", err.Error())
+			return
+		} else if declined {
+			need = nil
+		}
+	}
+	if need != nil {
+		writeJSON(w, http.StatusOK, completeMethodResponse{
+			Result:  types.MethodResult{Success: false, MethodID: methodID, ErrorReason: "prerequisite_missing:" + strings.Join(need, "|")},
+			Session: sess,
+		})
+		return
+	}
+
 	cc := types.CeremonyContext{
 		SessionID: sess.ID,
 		HolderDID: sess.HolderDID,
@@ -334,6 +416,40 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "complete_failed", err.Error())
 		return
 	}
+	// Device attestation outcome (a fixed reason code, never the chain), so
+	// an operator can see why a test phone passed or failed.
+	if methodID == appattestmethod.MethodID {
+		log.Printf("app-attest-device: success=%t reason=%q", result.Success, result.ErrorReason)
+	}
+	var routing *faceMatchRouting
+	if s.lockout != nil {
+		switch {
+		// The web and the native selfie share one accumulator, so a face
+		// match from either gets the same routing (recover / not me /
+		// review).
+		case isSelfieMethod(methodID) && !result.Success && result.ErrorReason == fuzzyextractorselfie.ReasonDuplicate:
+			res, rt, err := s.routeFaceMatch(ctx, sess, method.Metadata())
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "face_match_failed", err.Error())
+				return
+			}
+			if res.Success {
+				view, _ := s.sessions.Get(sess.ID)
+				writeJSON(w, http.StatusOK, completeMethodResponse{Result: res, Session: view})
+				return
+			}
+			routing = rt
+		case methodID == socialvouching.InPersonMethodID && result.Success:
+			reason, err := s.checkDeclinedVouches(ctx, sess)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "complete_failed", err.Error())
+				return
+			}
+			if reason != "" {
+				result = types.MethodResult{Success: false, MethodID: methodID, ErrorReason: reason}
+			}
+		}
+	}
 	if result.Success {
 		if recErr := s.recordVerified(sess.ID, methodID, result, method.Metadata()); recErr != nil {
 			writeError(w, http.StatusInternalServerError, "record_failed", recErr.Error())
@@ -341,7 +457,14 @@ func (s *Server) handleCompleteMethod(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	view, _ := s.sessions.Get(sess.ID)
-	writeJSON(w, http.StatusOK, completeMethodResponse{Result: result, Session: view})
+	writeJSON(w, http.StatusOK, completeMethodResponse{Result: result, Session: view, FaceMatch: routing})
+}
+
+func recoveryDelaySeconds(s *Server) int64 {
+	if s.lockout == nil {
+		return 0
+	}
+	return int64(s.cfg.Lockout.RecoveryDelay / time.Second)
 }
 
 // handleEmailMagicLink is the GET /v1/methods/email/verify endpoint every
@@ -432,6 +555,10 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 			"complete at least one method ceremony before requesting issuance")
 		return
 	}
+	if err := s.checkHolderPoP(view, req.HolderProofB64); err != nil {
+		writeError(w, http.StatusForbidden, err.code, err.message)
+		return
+	}
 
 	issuedAt := s.nowFunc()
 	expiresAt := issuedAt.Add(s.credentialLifetime)
@@ -453,7 +580,7 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	// verified an email or phone, the binding comes from that identifier's
 	// seed, so the same inbox always gets the same binding no matter how
 	// many device keys it enrolls with (identifier.go).
-	bio := biometricCommitmentFromVerifiedMethods(view.VerifiedMethods, fuzzyextractorselfie.MethodID)
+	bio := selfieCommitment(view.VerifiedMethods)
 	if bio == "" && s.identifierKeys != nil {
 		for _, vm := range view.VerifiedMethods {
 			if kind := identifierKindForMethod(vm.MethodID); kind != "" && view.IdentifierKeys[kind] == "" {
@@ -477,6 +604,38 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	if bio != "" {
 		nullifierBinding = NullifierBindingForBiometricCommitment(bio)
 	}
+	// With holder revocation on, every nullifier seed this session touched
+	// is checked against the ban list and recorded, not only the one the
+	// credential carries, so a revoked person can't come back through
+	// another of their seeds (see holderrevoke.go).
+	var seedCommitments []string
+	if s.holders != nil {
+		seedCommitments, err = s.sessionNullifierCommitments(r.Context(), view, nullifierBinding, bio != "")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "identifier_seed_failed", err.Error())
+			return
+		}
+		apiErr, err := s.checkHolderBans(r.Context(), view.HolderDID, seedCommitments)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "ban_check_failed", err.Error())
+			return
+		}
+		if apiErr != nil {
+			writeErrorNext(w, http.StatusForbidden, apiErr.code, apiErr.message, s.appealStepIfLockout(), nil)
+			return
+		}
+	}
+	if s.lockout != nil {
+		status, code, msg, next, err := s.lockoutIssuanceCheck(r.Context(), view)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "issuance_check_failed", err.Error())
+			return
+		}
+		if status != 0 {
+			writeErrorNext(w, status, code, msg, next, nil)
+			return
+		}
+	}
 	// Every credential gets a random slot in the status list so it can be
 	// revoked later (see RevocationStore). A slot claimed for a request
 	// that then fails stays unused, which is harmless.
@@ -493,6 +652,22 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 	if err := s.revocations.Bind(r.Context(), statusIndex, cred.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "status_slot_failed", err.Error())
 		return
+	}
+	// Record the issuance before handing the credential out, so a holder
+	// revocation can always find it. On failure the client retries the
+	// session; the unused credential is never returned.
+	if s.holders != nil {
+		rec := IssuanceRecord{CredentialID: cred.ID, NullifierCommitments: seedCommitments, IssuedAt: issuedAt}
+		if err := s.holders.RecordIssuance(r.Context(), view.HolderDID, rec); err != nil {
+			writeError(w, http.StatusInternalServerError, "issuance_record_failed", err.Error())
+			return
+		}
+	}
+	if s.lockout != nil {
+		if err := s.lockoutRecordIssuance(r.Context(), view, seedCommitments); err != nil {
+			writeError(w, http.StatusInternalServerError, "issuance_record_failed", err.Error())
+			return
+		}
 	}
 	if err := s.sessions.MarkIssued(req.SessionID, cred.ID); err != nil {
 		// Already-issued races are reported as 409; everything else as 500.
@@ -567,10 +742,7 @@ type adminRevokeResponse struct {
 // handleAdminRevoke sets a credential's revocation bit. Mounted only when
 // Config.AdminToken is set; the caller must send it as a Bearer token.
 func (s *Server) handleAdminRevoke(w http.ResponseWriter, r *http.Request) {
-	const prefix = "Bearer "
-	got := r.Header.Get("Authorization")
-	if !strings.HasPrefix(got, prefix) ||
-		subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(got, prefix)), []byte(s.cfg.AdminToken)) != 1 {
+	if !s.adminAuthorized(r) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "a valid admin bearer token is required")
 		return
 	}
@@ -593,6 +765,15 @@ func (s *Server) handleAdminRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, adminRevokeResponse{CredentialID: req.CredentialID, StatusListIndex: idx, AlreadyRevoked: already})
+}
+
+// adminAuthorized reports whether r carries the admin bearer token. Admin
+// routes are mounted only when Config.AdminToken is set.
+func (s *Server) adminAuthorized(r *http.Request) bool {
+	const prefix = "Bearer "
+	got := r.Header.Get("Authorization")
+	return s.cfg.AdminToken != "" && strings.HasPrefix(got, prefix) &&
+		subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(got, prefix)), []byte(s.cfg.AdminToken)) == 1
 }
 
 func (s *Server) handleDIDDocument(w http.ResponseWriter, _ *http.Request) {

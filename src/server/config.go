@@ -109,6 +109,34 @@ type Config struct {
 	// Env: IDENTIFIER_HMAC_KEY (base64, at least 32 bytes decoded).
 	IdentifierHMACKey []byte
 
+	// RequireHolderPoP makes POST /v1/credentials/issue refuse a session
+	// whose declared holder key hasn't signed HolderPoPMessage (see
+	// holderpop.go). Off (the default) still verifies a proof when one is
+	// sent; it only stops requiring one, for clients that predate it.
+	//
+	// Env: REQUIRE_HOLDER_POP.
+	RequireHolderPoP bool
+
+	// HolderRevocation turns on holder revocation (holderrevoke.go): the
+	// issuer records each issuance per holder, refuses issuance to revoked
+	// holders and banned nullifier seeds, and mounts POST
+	// /v1/revocations/equivocation (public) and, with AdminToken, POST
+	// /v1/admin/revoke-holder. Required by the in-person-vouch anchor.
+	//
+	// Env: HOLDER_REVOCATION_ENABLED.
+	HolderRevocation bool
+
+	// NoFalseLockout turns on the "never false-lockout an honest person"
+	// paths (nolockout.go): a selfie that matches an enrolled face is routed
+	// (recover your own identity, or continue with another anchor) instead
+	// of only refused; identity recovery onto a new holder key with a
+	// second factor and a cancel window; and, with AdminToken, a manual
+	// review queue, appeals and reinstatement. Needs HolderRevocation.
+	//
+	// Env: NO_FALSE_LOCKOUT. Tunables: see LockoutConfig.
+	NoFalseLockout bool
+	Lockout        LockoutConfig
+
 	// IssuerPQSeed, when set, makes every credential also carry an ML-DSA-65
 	// (FIPS 204) signature in proof.pqProof, and the DID document publish the
 	// matching key as #key-pq-1. Experimental; see docs/POST_QUANTUM.md.
@@ -148,6 +176,8 @@ type Config struct {
 //   - IDENTIFIER_HMAC_KEY          default empty (per-identifier nullifier
 //     seeds off). Base64 secret of at least 32 bytes; see
 //     Config.IdentifierHMACKey.
+//   - REQUIRE_HOLDER_POP           default off. When on, issuance needs a
+//     holder_proof_b64 from any session that declared a holder key.
 //   - ISSUER_MLDSA_SK              default empty (Ed25519-only credentials).
 //     Base64 32-byte seed; see Config.IssuerPQSeed.
 //   - RATE_LIMIT                   default on (DefaultRateLimitConfig);
@@ -163,6 +193,16 @@ func LoadConfigFromEnv() (Config, error) {
 		ExposeChallengeSecrets: envBool(os.Getenv("DEV_EXPOSE_CHALLENGE_SECRETS")),
 		EnrollmentInviteCode:   strings.TrimSpace(os.Getenv("ENROLLMENT_INVITE_CODE")),
 		AdminToken:             strings.TrimSpace(os.Getenv("ADMIN_TOKEN")),
+		RequireHolderPoP:       envBool(os.Getenv("REQUIRE_HOLDER_POP")),
+		HolderRevocation:       envBool(os.Getenv("HOLDER_REVOCATION_ENABLED")),
+		NoFalseLockout:         envBool(os.Getenv("NO_FALSE_LOCKOUT")),
+	}
+	if cfg.NoFalseLockout {
+		lc, err := lockoutConfigFromEnv()
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Lockout = lc
 	}
 
 	if m := os.Getenv("SESSION_TTL_MINUTES"); m != "" {
@@ -240,6 +280,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SessionTTL <= 0 {
 		return errors.New("server: Config.SessionTTL must be positive")
+	}
+	if c.NoFalseLockout && !c.HolderRevocation {
+		return errors.New("server: NO_FALSE_LOCKOUT needs HOLDER_REVOCATION_ENABLED: recovery and appeals work on the holder ledger")
 	}
 	return nil
 }

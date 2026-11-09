@@ -1,0 +1,54 @@
+# Personhood issuer kit — one independent issuer on any Linux box with Docker.
+# Start it with ./up.sh (which writes issuer.env first), not by hand.
+# docs/RUN_AN_ISSUER.md explains every setting.
+#
+#   redis   sessions, sign-in links, status-list slots, revocations and the
+#           one-inbox-one-voter seeds; append-only file on the redis-data
+#           volume, so a restart forgets nothing.
+#   issuer  the Personhood server, built from this checkout.
+#   caddy   HTTPS in front of the issuer (automatic Let's Encrypt). Only in
+#           the "tls" profile; ./up.sh --local skips it.
+
+name: personhood-issuer
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "300", "1"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  issuer:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    env_file: ./issuer.env
+    environment:
+      SERVER_ADDR: ":8080"
+      REDIS_URL: "redis://redis:6379"
+    ports:
+      # Loopback only: the outside world reaches the issuer through Caddy.
+      - "127.0.0.1:${ISSUER_LOCAL_PORT:-8090}:8080"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8-alpine
+    profiles: ["tls"]
+    environment:
+      ISSUER_DOMAIN: "${ISSUER_DOMAIN:-}"  # set by up.sh
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - issuer
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  caddy-data:

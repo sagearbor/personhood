@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
@@ -15,8 +16,8 @@ import (
 	"github.com/sagearbor/personhood/pkg/types"
 	"github.com/sagearbor/personhood/src/credential"
 	"github.com/sagearbor/personhood/src/credential/pq"
-	appattestmethod "github.com/sagearbor/personhood/src/methods/app-attest-device"
 	captchamethod "github.com/sagearbor/personhood/src/methods/captcha-turnstile"
+	documentchip "github.com/sagearbor/personhood/src/methods/document-chip"
 	emailmethod "github.com/sagearbor/personhood/src/methods/email"
 	emailtiermethod "github.com/sagearbor/personhood/src/methods/email-tier"
 	fuzzyextractorselfie "github.com/sagearbor/personhood/src/methods/fuzzy-extractor-selfie"
@@ -61,6 +62,31 @@ type Server struct {
 	// empty, which turns the feature off.
 	identifierKeys *identifierKeyer
 	identifiers    IdentifierStore
+
+	// identifierSends caps messages per email/phone (sendlimit.go); nil
+	// when RateLimit.IdentifierSendsPerHour is 0.
+	identifierSends *identifierSendLimiter
+
+	// holders is the holder-revocation ledger (holderrevoke.go); nil unless
+	// Config.HolderRevocation.
+	holders HolderLedger
+
+	// inPerson runs in-person vouching (inperson.go); nil unless
+	// IN_PERSON_VOUCH_ENABLED. revokeHolder penalizes vouchers through it.
+	inPerson *socialvouching.InPerson
+
+	// documentReviews lists dual-document review cases (documentanchor.go);
+	// nil unless DOCUMENT_CHIP_ANCHOR=1.
+	documentReviews documentchip.ReviewQueue
+
+	// methodPrerequisites maps a method id to methods the session must
+	// already hold (any one of them) before it may complete. Set by the
+	// in-person-vouch anchor policy.
+	methodPrerequisites map[string][]string
+
+	// lockout holds the no-false-lockout records (nolockout.go); nil
+	// unless Config.NoFalseLockout.
+	lockout *lockoutStore
 
 	// methodRoutes carries additional HTTP handlers a method plugin needs
 	// the server to host (e.g. third-party webhook receivers). Populated by
@@ -120,6 +146,22 @@ type Dependencies struct {
 	// Twilio), so a client knows a phone number would get no message.
 	// Surfaced on GET /v1/config as sms_delivery.
 	SMSSenderKind string
+
+	// VouchGraph is the trust graph social-vouching-graph was built with
+	// (nil when it is not registered). In-person vouching records into it.
+	VouchGraph socialvouching.GraphStore
+
+	// InPersonVouch turns on in-person vouching (inperson.go); nil = off.
+	InPersonVouch *InPersonVouchOptions
+
+	// DocumentAnchor connects the document methods (documentanchor.go) to
+	// the server's identifier store; nil = off.
+	DocumentAnchor *documentAnchorDeps
+
+	// SelfieMatches relays the selfie method's face matches to the server
+	// (NoFalseLockout routing). BuildDependencies sets it whenever it
+	// registers the selfie method; nil means matches are not routed.
+	SelfieMatches *SelfieMatchRelay
 }
 
 // NewServer constructs a Server from cfg and deps. It returns an error if cfg
@@ -171,6 +213,10 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		return nil, fmt.Errorf("server: revocation store: %w", err)
 	}
 
+	var sends *identifierSendLimiter
+	if n := cfg.RateLimit.IdentifierSendsPerHour; n > 0 {
+		sends = newIdentifierSendLimiter(n)
+	}
 	var keyer *identifierKeyer
 	var identifiers IdentifierStore
 	if len(cfg.IdentifierHMACKey) > 0 {
@@ -180,7 +226,7 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		if identifiers, err = NewIdentifierStoreFromEnv(); err != nil {
 			return nil, fmt.Errorf("server: identifier store: %w", err)
 		}
-	} else if os.Getenv("FIRESTORE_PROJECT_ID") != "" {
+	} else if os.Getenv("FIRESTORE_PROJECT_ID") != "" || os.Getenv("REDIS_URL") != "" {
 		log.Printf(`{"severity":"WARNING","message":"%s is not set: one email inbox or phone can enroll any number of times and get an independent credential each time"}`, IdentifierKeyEnv)
 	}
 
@@ -189,7 +235,14 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		emailDelivery = emailmethod.SenderKindUnknown
 	}
 
-	return &Server{
+	var holders HolderLedger
+	if cfg.HolderRevocation {
+		if holders, err = NewHolderLedgerFromEnv(); err != nil {
+			return nil, fmt.Errorf("server: holder ledger: %w", err)
+		}
+	}
+
+	s := &Server{
 		cfg:                cfg,
 		emailDelivery:      emailDelivery,
 		smsDelivery:        firstNonEmpty(deps.SMSSenderKind, SMSDeliveryUnknown),
@@ -204,10 +257,28 @@ func NewServer(cfg Config, deps Dependencies) (*Server, error) {
 		revocations:        revocations,
 		identifierKeys:     keyer,
 		identifiers:        identifiers,
-		methodRoutes:       deps.MethodRoutes,
+		identifierSends:    sends,
+		holders:            holders,
+		methodRoutes:       append([]methodRoute(nil), deps.MethodRoutes...),
 		nowFunc:            func() time.Time { return time.Now().UTC() },
 		credentialLifetime: 365 * 24 * time.Hour,
-	}, nil
+	}
+	if deps.InPersonVouch != nil {
+		if err := s.wireInPersonVouch(deps.InPersonVouch, deps.VouchGraph); err != nil {
+			return nil, err
+		}
+	}
+	if deps.DocumentAnchor != nil {
+		if err := s.wireDocumentAnchor(deps.DocumentAnchor); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.NoFalseLockout {
+		if err := s.wireNoFalseLockout(deps.SelfieMatches); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 // IssuerDID returns the issuer's did:web identifier. Exposed for tests and
@@ -414,16 +485,45 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 		}
 	}
 
-	// app-attest-device: registered when APP_ATTEST_SECRET is set. v0.1 uses the
-	// HMAC dev verifier; v0.2 swaps in real Apple App Attest / Play Integrity
-	// verification behind the same Verifier interface.
-	if appAttestSecret := os.Getenv("APP_ATTEST_SECRET"); appAttestSecret != "" {
-		appAttest := appattestmethod.NewMethod(appattestmethod.Config{
-			Verifier: appattestmethod.NewHMACDevVerifier(appAttestSecret),
-			Store:    appattestmethod.NewInMemoryStore(),
-		})
+	// app-attest-device: registered when ANDROID_KEY_ATTESTATION_PACKAGE
+	// (real Android Key Attestation) and/or APP_ATTEST_SECRET (the HMAC dev
+	// stand-in) is set. See appattest.go.
+	appAttest, err := appAttestFromEnv()
+	if err != nil {
+		return Dependencies{}, err
+	}
+	if appAttest != nil {
 		if err := reg.Register(appAttest); err != nil {
 			return Dependencies{}, fmt.Errorf("register app-attest-device: %w", err)
+		}
+	}
+
+	// document-chip + document-signed-qr: government documents signed by
+	// the issuing state, no vendor. DOCUMENT_CHIP_ANCHOR=1; see
+	// documentanchor.go and docs/document-chip-anchor.md.
+	chip, signedQR, docDeps, err := documentAnchorFromEnv()
+	if err != nil {
+		return Dependencies{}, fmt.Errorf("document anchor: %w", err)
+	}
+	if chip != nil {
+		if err := reg.Register(chip); err != nil {
+			return Dependencies{}, fmt.Errorf("register document-chip: %w", err)
+		}
+		if err := reg.Register(signedQR); err != nil {
+			return Dependencies{}, fmt.Errorf("register document-signed-qr: %w", err)
+		}
+		if zk := docDeps.zk; zk != nil {
+			if err := reg.Register(zk); err != nil {
+				return Dependencies{}, fmt.Errorf("register document-chip-zk: %w", err)
+			}
+			for _, rt := range []struct {
+				path string
+				h    http.Handler
+			}{{"registry", zk.RegistryHandler()}, {"circuits", zk.CircuitsHandler()}, {"artifacts/*", zk.ArtifactsHandler()}} {
+				deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
+					MethodID: documentchip.ZKMethodID, Path: rt.path, Method: http.MethodGet, Handler: rt.h,
+				})
+			}
 		}
 	}
 
@@ -522,10 +622,62 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 	// vendor credential to gate on, so registration is instead an explicit
 	// opt-in via FUZZY_EXTRACTOR_ENABLED, consistent with this repo's
 	// pattern of not silently changing what a default deployment advertises.
-	if os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
+	//
+	// SELFIE_ANCHOR=1 is the version meant for real phones: the web app's
+	// on-device face model plus an active-liveness ceremony (random head /
+	// eye challenges, see the method's liveness.go), a durable accumulator,
+	// and strength 50 instead of 70. docs/selfie-anchor.md says what it
+	// does and does not prove. FUZZY_EXTRACTOR_ENABLED keeps the original
+	// template-only dev ceremony; the two are exclusive.
+	selfieAnchor := os.Getenv("SELFIE_ANCHOR") == "1"
+	if selfieAnchor && os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
+		return Dependencies{}, fmt.Errorf("fuzzy-extractor-selfie: set SELFIE_ANCHOR=1 or FUZZY_EXTRACTOR_ENABLED, not both")
+	}
+	if selfieAnchor {
+		acc, durable, err := NewSelfieAccumulatorFromEnv()
+		if err != nil {
+			return Dependencies{}, fmt.Errorf("fuzzy-extractor-selfie: %w", err)
+		}
+		if !durable {
+			log.Printf("WARNING: SELFIE_ANCHOR=1 without FIRESTORE_PROJECT_ID or REDIS_URL: enrolled faces are kept in memory and forgotten on restart, after which every face can enroll again")
+		}
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return Dependencies{}, fmt.Errorf("fuzzy-extractor-selfie: liveness key: %w", err)
+		}
+		relay := &SelfieMatchRelay{}
+		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{
+			Accumulator: acc,
+			Liveness:    &fuzzyextractorselfie.LivenessConfig{Key: key},
+			Strength:    SelfieAnchorStrength,
+			OnMatch:     relay.OnMatch,
+		})
+		deps.SelfieMatches = relay
+		if err := reg.Register(fuzzy); err != nil {
+			return Dependencies{}, fmt.Errorf("register fuzzy-extractor-selfie: %w", err)
+		}
+		// SELFIE_NATIVE=1 adds the native-wallet ceremony: same faces,
+		// same accumulator, plus Android Key Attestation over a signed
+		// summary and camera/IMU/screen-light checks (the method's
+		// native.go). It needs the Android attestation settings.
+		if os.Getenv("SELFIE_NATIVE") == "1" {
+			native, err := selfieNativeFromEnv(fuzzy)
+			if err != nil {
+				return Dependencies{}, err
+			}
+			if err := reg.Register(native); err != nil {
+				return Dependencies{}, fmt.Errorf("register %s: %w", fuzzyextractorselfie.NativeMethodID, err)
+			}
+		}
+	} else if os.Getenv("SELFIE_NATIVE") == "1" {
+		return Dependencies{}, fmt.Errorf("SELFIE_NATIVE=1 needs SELFIE_ANCHOR=1")
+	} else if os.Getenv("FUZZY_EXTRACTOR_ENABLED") != "" {
+		relay := &SelfieMatchRelay{}
 		fuzzy := fuzzyextractorselfie.NewMethod(fuzzyextractorselfie.Config{
 			Accumulator: fuzzyextractorselfie.NewInMemoryAccumulator(),
+			OnMatch:     relay.OnMatch,
 		})
+		deps.SelfieMatches = relay
 		if err := reg.Register(fuzzy); err != nil {
 			return Dependencies{}, fmt.Errorf("register fuzzy-extractor-selfie: %w", err)
 		}
@@ -533,14 +685,20 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 
 	// social-vouching-graph (checklist #10b): the BrightID-style web-of-
 	// trust supplementary method. Like fuzzy-extractor-selfie, no vendor is
-	// involved; registration is opt-in via SOCIAL_VOUCHING_ENABLED because
-	// the method is useless without an operator-configured seed set
-	// (SOCIAL_VOUCHING_SEED_IDS, comma-separated, each seeded at trust 1.0)
-	// and a shared secret for the dev voucher authenticator
-	// (SOCIAL_VOUCHING_SECRET). See src/methods/social-vouching/README.md.
-	if os.Getenv("SOCIAL_VOUCHING_ENABLED") != "" {
+	// involved; registration is opt-in via SOCIAL_VOUCHING_ENABLED (bootstrap
+	// seeds in SOCIAL_VOUCHING_SEED_IDS, comma-separated, each at trust 1.0;
+	// SOCIAL_VOUCHING_SECRET for the dev HMAC /vouch route), or implied by
+	// IN_PERSON_VOUCH_ENABLED, whose ceremony records vouches into the same
+	// graph and needs no secret (vouchers prove themselves with their own
+	// credential). See src/methods/social-vouching/README.md.
+	inPerson, err := inPersonOptionsFromEnv()
+	if err != nil {
+		return Dependencies{}, err
+	}
+	socialOn := os.Getenv("SOCIAL_VOUCHING_ENABLED") != ""
+	if socialOn || inPerson != nil {
 		secret := os.Getenv("SOCIAL_VOUCHING_SECRET")
-		if secret == "" {
+		if socialOn && secret == "" && inPerson == nil {
 			return Dependencies{}, fmt.Errorf("social-vouching-graph: SOCIAL_VOUCHING_ENABLED is set but SOCIAL_VOUCHING_SECRET is empty")
 		}
 		seeds := make(map[string]float64)
@@ -550,20 +708,28 @@ func BuildDependencies(magicLinkBaseURL, returnURL string) (Dependencies, error)
 				seeds[id] = 1.0
 			}
 		}
-		vouching := socialvouching.NewMethod(socialvouching.Config{
-			Store:         socialvouching.NewInMemoryGraphStore(seeds),
-			Authenticator: socialvouching.NewHMACDevAuthenticator(secret),
-		})
+		graph := socialvouching.NewInMemoryGraphStore(seeds)
+		var auth socialvouching.VoucherAuthenticator = socialvouching.RejectAllAuthenticator{}
+		devRoute := socialOn && secret != ""
+		if devRoute {
+			auth = socialvouching.NewHMACDevAuthenticator(secret)
+		}
+		vouching := socialvouching.NewMethod(socialvouching.Config{Store: graph, Authenticator: auth})
 		if err := reg.Register(vouching); err != nil {
 			return Dependencies{}, fmt.Errorf("register social-vouching-graph: %w", err)
 		}
-		deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
-			MethodID: socialvouching.MethodID,
-			Path:     "vouch",
-			Method:   http.MethodPost,
-			Handler:  vouching.VouchHandler(nil),
-		})
+		if devRoute {
+			deps.MethodRoutes = append(deps.MethodRoutes, methodRoute{
+				MethodID: socialvouching.MethodID,
+				Path:     "vouch",
+				Method:   http.MethodPost,
+				Handler:  vouching.VouchHandler(nil),
+			})
+		}
+		deps.VouchGraph = graph
+		deps.InPersonVouch = inPerson
 	}
+	deps.DocumentAnchor = docDeps
 
 	return deps, nil
 }

@@ -125,36 +125,59 @@ export async function clearSession(): Promise<void> {
 
 // --- holder Ed25519 keypair (see lib/holderkey.ts) -----------------------
 //
-// Persisted as raw base64 bytes rather than as CryptoKey objects so the
-// stored shape stays a plain, inspectable JSON value. See holderkey.ts's
-// module doc for the v0.1/v0.2 tradeoffs.
+// Stored as { publicKeyB64, privateKey: CryptoKey } with a non-extractable
+// private key; IndexedDB's structured clone keeps the CryptoKey opaque.
+// Earlier versions stored { publicKeyB64, privateKeyB64 } (base64 pkcs8);
+// holderkey.ts migrates that shape on first load and overwrites it here.
 
 const KEY_HOLDER_KEY = 'holder_key_v1';
 
-type StoredHolderKeyPair = {
-  publicKeyB64: string;
-  privateKeyB64: string;
-};
+type StoredHolderKeyPair =
+  | { publicKeyB64: string; privateKey: CryptoKey }
+  | { publicKeyB64: string; privateKeyB64: string };
 
 export async function saveHolderKeyPair(pair: StoredHolderKeyPair): Promise<void> {
+  await kvPut(KEY_HOLDER_KEY, pair);
+}
+
+export async function loadHolderKeyPair(): Promise<StoredHolderKeyPair | null> {
+  return (await kvGet<StoredHolderKeyPair>(KEY_HOLDER_KEY)) ?? null;
+}
+
+// --- device passkey id (see lib/webauthn.ts) ------------------------------
+//
+// The credential id of the passkey registered at the save step. Once set,
+// holderkey.ts asks for that passkey's biometric / PIN check before signing.
+
+const KEY_DEVICE_PASSKEY = 'device_passkey_id_v1';
+
+export async function saveDevicePasskeyId(id: string): Promise<void> {
+  await kvPut(KEY_DEVICE_PASSKEY, id);
+}
+
+export async function loadDevicePasskeyId(): Promise<string | null> {
+  return (await kvGet<string>(KEY_DEVICE_PASSKEY)) ?? null;
+}
+
+async function kvPut(key: string, value: unknown): Promise<void> {
   const db = await openDB();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_KV, 'readwrite');
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
-    tx.objectStore(STORE_KV).put(pair, KEY_HOLDER_KEY);
+    tx.objectStore(STORE_KV).put(value, key);
   });
   db.close();
 }
 
-export async function loadHolderKeyPair(): Promise<StoredHolderKeyPair | null> {
+async function kvGet<T>(key: string): Promise<T | undefined> {
   const db = await openDB();
-  const v: StoredHolderKeyPair | undefined = await new Promise((resolve, reject) => {
+  const v: T | undefined = await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_KV, 'readonly');
-    const req = tx.objectStore(STORE_KV).get(KEY_HOLDER_KEY);
-    req.onsuccess = () => resolve(req.result as StoredHolderKeyPair | undefined);
+    const req = tx.objectStore(STORE_KV).get(key);
+    req.onsuccess = () => resolve(req.result as T | undefined);
     req.onerror = () => reject(req.error);
   });
   db.close();
-  return v ?? null;
+  return v;
 }

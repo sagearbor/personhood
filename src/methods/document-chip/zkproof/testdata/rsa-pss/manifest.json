@@ -1,0 +1,13 @@
+{
+ "circuits": {
+  "dsc": "sig_check_dsc_tbs_700_rsa_pss_3072_sha256",
+  "id": "sig_check_id_data_tbs_700_rsa_pss_2048_sha256",
+  "integrity": "data_check_integrity_sa_sha256_dg_sha256",
+  "bind": "bind",
+  "aa": "aa_dg_sha256_rsa_1024_sha1"
+ },
+ "registry_root": "0x212896a68add44fc35d5911905ec7ef94b27a11d65b1f2e736fa7b8df8751246",
+ "scope": "0x28a6676ad15b10f2b78fb5f1e25cd20c68e5d4611ecf6b364df8427d0c69edfe",
+ "current_date": 1794173783,
+ "aa_challenge": "0xd146d2339f0b53c5"
+}

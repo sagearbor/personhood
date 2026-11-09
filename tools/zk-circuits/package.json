@@ -1,0 +1,11 @@
+{
+  "name": "personhood-zk-circuits",
+  "private": true,
+  "type": "module",
+  "description": "Reproducible build of the zkPassport circuit variants document-chip-zk accepts (see README.md)",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@aztec/bb.js": "5.0.0",
+    "@noir-lang/noir_wasm": "1.0.0-beta.22"
+  }
+}

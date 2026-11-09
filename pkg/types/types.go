@@ -547,4 +547,21 @@ type MethodResult struct {
 	// session store, never put on a credential. The issuer turns it into a
 	// keyed hash and drops it.
 	VerifiedIdentifier string `json:"-"`
+
+	// Strength, when non-zero, is the strength this ceremony's evidence
+	// earned, for methods whose evidence varies (document-chip-zk: 80 with
+	// Active Authentication, 70 for a chip without it). It can only lower
+	// the method's metadata strength, never raise it (EffectiveStrength).
+	// Zero means the metadata strength.
+	Strength int `json:"strength,omitempty"`
+}
+
+// EffectiveStrength is the strength a session records for a successful
+// result: the result's own Strength when set and below the method's
+// metadata strength, the metadata strength otherwise.
+func EffectiveStrength(md MethodMetadata, r MethodResult) int {
+	if r.Strength > 0 && r.Strength < md.Strength {
+		return r.Strength
+	}
+	return md.Strength
 }

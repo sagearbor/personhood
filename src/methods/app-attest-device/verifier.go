@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 )
 
 // Platform identifies the device attestation ecosystem the token came from.
@@ -16,7 +17,8 @@ const (
 	// PlatformIOS is Apple App Attest (DCAppAttestService).
 	PlatformIOS Platform = "ios"
 
-	// PlatformAndroid is Google Play Integrity.
+	// PlatformAndroid is an Android phone. With AndroidKeyVerifier the token
+	// is an Android Key Attestation certificate chain (see androidkey.go).
 	PlatformAndroid Platform = "android"
 )
 
@@ -30,8 +32,9 @@ type AttestationInput struct {
 	// Nonce is the server challenge the device signed.
 	Nonce string
 
-	// Token is the base64 attestation object (iOS) or the integrity token
-	// (Android).
+	// Token is the base64 attestation object (iOS) or, for Android Key
+	// Attestation, the certificate chain: base64 DER certificates, leaf
+	// first, joined with ",".
 	Token string
 
 	// KeyID is the iOS App Attest key id. Optional for Android.
@@ -41,11 +44,61 @@ type AttestationInput struct {
 // Verifier validates that an AttestationInput came from a genuine,
 // non-emulated device and is bound to the issued Nonce. A nil error means
 // genuine device + nonce matches; any non-nil error means the attestation must
-// be rejected.
+// be rejected. A *VerifyError carries a machine-readable reason.
 //
 // Implementations MUST be safe for concurrent use.
 type Verifier interface {
-	Verify(ctx context.Context, in AttestationInput) error
+	Verify(ctx context.Context, in AttestationInput) (Evidence, error)
+}
+
+// Evidence is what a successful verification learned beyond "yes".
+type Evidence struct {
+	// SecurityLevel is "tee" or "strongbox" for Android Key Attestation;
+	// empty for verifiers that do not know.
+	SecurityLevel string
+
+	// DeviceHint is a value that is likely the same for the same phone over
+	// a short period, and is set only where that is honest (see
+	// androidkey.go: Remote Key Provisioning attestation keys). It is a
+	// rate-limit hint, never an identity: different values do not prove
+	// different phones, and it rotates.
+	DeviceHint string
+}
+
+// VerifyError is a rejected attestation with a short machine-readable
+// reason (e.g. "attestation_not_hardware"), which becomes the
+// MethodResult.ErrorReason.
+type VerifyError struct {
+	Reason string
+	Err    error
+}
+
+func (e *VerifyError) Error() string {
+	if e.Err == nil {
+		return "app-attest-device: " + e.Reason
+	}
+	return "app-attest-device: " + e.Reason + ": " + e.Err.Error()
+}
+
+func (e *VerifyError) Unwrap() error { return e.Err }
+
+func reject(reason string, format string, args ...any) error {
+	return &VerifyError{Reason: reason, Err: fmt.Errorf(format, args...)}
+}
+
+// PlatformRouter sends each attestation to the Verifier for its platform.
+// A platform with no entry is rejected as "platform_unsupported".
+type PlatformRouter map[Platform]Verifier
+
+var _ Verifier = PlatformRouter(nil)
+
+// Verify implements Verifier.
+func (r PlatformRouter) Verify(ctx context.Context, in AttestationInput) (Evidence, error) {
+	v, ok := r[in.Platform]
+	if !ok || v == nil {
+		return Evidence{}, &VerifyError{Reason: "platform_unsupported"}
+	}
+	return v.Verify(ctx, in)
 }
 
 // ErrAttestationMismatch is returned by HMACDevVerifier when the supplied token
@@ -57,16 +110,11 @@ var ErrAttestationMismatch = errors.New("app-attest-device: attestation token mi
 // compares it (hex) to the supplied Token. This makes the whole method testable
 // end-to-end without Apple or Google infrastructure.
 //
-// PRODUCTION NOTE: this is NOT real device attestation. v0.2 must swap in a
-// real verifier:
-//   - iOS: parse the CBOR attestation object, validate the certificate chain to
-//     the Apple App Attest root, confirm the embedded nonce hash, and pin the
-//     app's appID + key id.
-//   - Android: decode the Play Integrity JWS/JWT against Google's public keys
-//     and assert MEETS_DEVICE_INTEGRITY (rejecting emulators) plus the request
-//     nonce.
-// The Verifier interface is the seam those drop into; nothing else in the
-// method needs to change.
+// PRODUCTION NOTE: this is NOT real device attestation. Android has a real
+// verifier (AndroidKeyVerifier, androidkey.go). iOS still needs one: parse
+// the CBOR attestation object, validate the certificate chain to the Apple
+// App Attest root, confirm the embedded nonce hash, and pin the app's appID +
+// key id.
 type HMACDevVerifier struct {
 	secret []byte
 }
@@ -83,12 +131,12 @@ func NewHMACDevVerifier(secret string) *HMACDevVerifier {
 }
 
 // Verify implements Verifier.
-func (v *HMACDevVerifier) Verify(_ context.Context, in AttestationInput) error {
+func (v *HMACDevVerifier) Verify(_ context.Context, in AttestationInput) (Evidence, error) {
 	want := hmacDeviceToken(v.secret, in.Platform, in.Nonce, in.KeyID)
 	if subtle.ConstantTimeCompare([]byte(want), []byte(in.Token)) != 1 {
-		return ErrAttestationMismatch
+		return Evidence{}, ErrAttestationMismatch
 	}
-	return nil
+	return Evidence{}, nil
 }
 
 // SignDeviceTokenForTesting produces the token a genuine device would send for

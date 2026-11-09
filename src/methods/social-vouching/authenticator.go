@@ -75,3 +75,13 @@ func vouchProof(secret []byte, voucherID, candidateID string) string {
 	mac.Write([]byte(voucherID + "." + candidateID))
 	return hex.EncodeToString(mac.Sum(nil))
 }
+
+// RejectAllAuthenticator refuses every dev-route vouch. The issuer uses it
+// when only in-person vouching is on, so social-vouching-graph still has an
+// Authenticator but its HMAC /vouch route is never mounted.
+type RejectAllAuthenticator struct{}
+
+// Authenticate implements VoucherAuthenticator.
+func (RejectAllAuthenticator) Authenticate(context.Context, string, string, string) error {
+	return ErrVouchProofMismatch
+}

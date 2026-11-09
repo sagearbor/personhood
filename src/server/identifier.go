@@ -15,7 +15,9 @@ import (
 	"sync"
 
 	"github.com/sagearbor/personhood/pkg/firestoreclient"
+	"github.com/sagearbor/personhood/pkg/redisclient"
 	"github.com/sagearbor/personhood/pkg/types"
+	documentchip "github.com/sagearbor/personhood/src/methods/document-chip"
 )
 
 // Per-identifier nullifier seeds: one inbox (or phone) is one voter.
@@ -59,6 +61,11 @@ const minIdentifierKeyBytes = 32
 const (
 	identifierKindEmail = "email"
 	identifierKindPhone = "phone"
+	// identifierKindDocument is a government document (document-chip,
+	// document-signed-qr). The method supplies an already-canonical,
+	// already-hashed identifier (documentchip.ChipIdentifier); it is keyed
+	// here like any other identifier.
+	identifierKindDocument = "document"
 )
 
 // identifierKindForMethod returns which identifier a method verifies, or ""
@@ -70,6 +77,8 @@ func identifierKindForMethod(methodID string) string {
 		return identifierKindEmail
 	case "sms", "phone-carrier-tier":
 		return identifierKindPhone
+	case documentchip.ChipMethodID, documentchip.QRMethodID, documentchip.ZKMethodID:
+		return identifierKindDocument
 	default:
 		return ""
 	}
@@ -158,6 +167,11 @@ func normalizeIdentifier(kind, raw string) (string, error) {
 		return NormalizeEmail(raw)
 	case identifierKindPhone:
 		return NormalizePhoneE164(raw)
+	case identifierKindDocument:
+		if !documentchip.IsDocumentIdentifier(raw) {
+			return "", fmt.Errorf("%w: not a document identifier", ErrIdentifierFormat)
+		}
+		return raw, nil
 	default:
 		return "", fmt.Errorf("%w: unknown identifier kind %q", ErrIdentifierFormat, kind)
 	}
@@ -205,10 +219,11 @@ type IdentifierStore interface {
 }
 
 // NewIdentifierStoreFromEnv returns a Firestore-backed store when
-// FIRESTORE_PROJECT_ID is set, else an in-memory one. Like revocations, there
-// is no Redis backend: seeds kept only in memory are lost on restart, after
-// which every inbox could enroll once more as a "new" person, so a real
-// deployment must use Firestore.
+// FIRESTORE_PROJECT_ID is set, a Redis-backed one when REDIS_URL is set
+// (the Redis server must persist to disk, as the issuer kit's does), else an
+// in-memory one. Seeds kept only in memory are lost on restart, after which
+// every inbox could enroll once more as a "new" person, so a real
+// deployment must use Firestore or persistent Redis.
 func NewIdentifierStoreFromEnv() (IdentifierStore, error) {
 	if projectID := os.Getenv("FIRESTORE_PROJECT_ID"); projectID != "" {
 		client, err := firestoreclient.New(projectID)
@@ -216,6 +231,13 @@ func NewIdentifierStoreFromEnv() (IdentifierStore, error) {
 			return nil, fmt.Errorf("server: FIRESTORE_PROJECT_ID: %w", err)
 		}
 		return NewFirestoreIdentifierStore(client), nil
+	}
+	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+		client, err := redisclient.ParseURL(redisURL)
+		if err != nil {
+			return nil, fmt.Errorf("server: REDIS_URL: %w", err)
+		}
+		return NewRedisIdentifierStore(client), nil
 	}
 	return NewInMemoryIdentifierStore(), nil
 }
@@ -317,9 +339,16 @@ func (s *FirestoreIdentifierStore) GetOrCreate(ctx context.Context, key, seed st
 }
 
 // identifierKindOrder fixes which identifier wins when a session's
-// identifiers are already bound to different seeds: a phone line is harder
-// to multiply than an inbox, so it goes first.
-var identifierKindOrder = map[string]int{identifierKindPhone: 0, identifierKindEmail: 1}
+// identifiers are already bound to different seeds: a government document
+// is harder to multiply than a phone line, and a phone line than an inbox.
+var identifierKindOrder = map[string]int{identifierKindDocument: 0, identifierKindPhone: 1, identifierKindEmail: 2}
+
+// identifierFromUserInput reports whether the method's identifier arrives
+// as /begin user_input (email, phone), so it can be normalized and rate
+// limited before anything is sent. Documents arrive in the completion.
+func identifierFromUserInput(kind string) bool {
+	return kind == identifierKindEmail || kind == identifierKindPhone
+}
 
 // resolveIdentifierSeed returns the nullifier seed for a session that
 // verified the identifiers in keys (kind -> keyed hash).

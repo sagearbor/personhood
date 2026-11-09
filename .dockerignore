@@ -16,6 +16,9 @@ sdk/typescript
 
 # Docs and meta — never needed to compile the binary.
 docs
+# Scripts, including the issuer kit's generated issuer.env and backups
+# (they hold a signing key and must never enter the build context).
+scripts
 tmp
 tests
 *.md
@@ -28,3 +31,9 @@ env.example
 # OS noise
 .DS_Store
 *.swp
+
+# zk-passport: the spike's downloads, and the circuit tool's caches (its
+# dist/ artifacts DO go in: the Dockerfile copies them).
+spikes
+tools/zk-circuits/node_modules
+tools/zk-circuits/.work

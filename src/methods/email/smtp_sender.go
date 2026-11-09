@@ -148,20 +148,7 @@ func smtpMessage(from, fromName, to, subject, magicLinkURL string) []byte {
 		fromHeader = fmt.Sprintf("%s <%s>", fromName, from)
 	}
 
-	plain := fmt.Sprintf(
-		"Tap the link to confirm your email for Personhood enrollment:\r\n\r\n%s\r\n\r\n"+
-			"This link expires in 15 minutes. If you did not request it, you can ignore this email.",
-		magicLinkURL,
-	)
-	htmlBody := fmt.Sprintf(
-		`<!doctype html><html><body style="font-family:system-ui,sans-serif;line-height:1.5;color:#0f1115">`+
-			`<p>Tap the button below to confirm your email for Personhood enrollment.</p>`+
-			`<p><a href=%q style="display:inline-block;padding:10px 16px;border-radius:8px;background:#0f1115;color:#fff;text-decoration:none">Confirm email</a></p>`+
-			`<p style="color:#6b7280;font-size:14px">Or open this link directly: <a href=%q>%s</a></p>`+
-			`<p style="color:#6b7280;font-size:14px">This link expires in 15 minutes. If you did not request it, you can ignore this email.</p>`+
-			`</body></html>`,
-		magicLinkURL, magicLinkURL, magicLinkURL,
-	)
+	plain, htmlBody := magicLinkBodies(magicLinkURL, time.Now())
 
 	const boundary = "personhood-smtp-boundary"
 	var b strings.Builder
